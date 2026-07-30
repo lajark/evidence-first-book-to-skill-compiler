@@ -1,0 +1,18 @@
+schema_version: 1
+language: zh-CN
+data_home: ./workspace
+default_mode: analyze
+network: disabled
+cloud_llm:
+  enabled: false
+  base_url: null
+  model: null
+limits:
+  max_input_mb: 200
+  max_direct_quote_words: 25
+  skill_target_tokens: 4000
+  reference_target_tokens: 1500
+hosts:
+  - claude
+  - trae
+  - codex

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "run_id": "book2skill-20260730T000824",
+  "status": "pass",
+  "checks": [
+    {
+      "check_id": "frontmatter",
+      "status": "pass",
+      "message": "No issues found.",
+      "evidence": []
+    },
+    {
+      "check_id": "source-coverage",
+      "status": "pass",
+      "message": "No issues found.",
+      "evidence": []
+    },
+    {
+      "check_id": "copyright",
+      "status": "pass",
+      "message": "No issues found.",
+      "evidence": []
+    },
+    {
+      "check_id": "injection",
+      "status": "pass",
+      "message": "No issues found.",
+      "evidence": []
+    },
+    {
+      "check_id": "budget",
+      "status": "pass",
+      "message": "No issues found.",
+      "evidence": []
+    }
+  ],
+  "published": false
+}

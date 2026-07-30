@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "source-manifest.schema.json",
+  "title": "SourceManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_id",
+    "content_sha256",
+    "format",
+    "rights_confirmed",
+    "version",
+    "ingested_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "original_name": {
+      "type": "string"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "format": {
+      "enum": [
+        "pdf",
+        "epub",
+        "mobi",
+        "azw",
+        "azw3",
+        "txt",
+        "md",
+        "docx",
+        "html",
+        "rtf"
+      ]
+    },
+    "rights_confirmed": {
+      "type": "boolean",
+      "const": true
+    },
+    "rights_note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "confidentiality": {
+      "enum": [
+        "personal",
+        "internal",
+        "public"
+      ]
+    },
+    "extractor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "extractor_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ingested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "supersedes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

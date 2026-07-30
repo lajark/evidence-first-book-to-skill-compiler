@@ -1,0 +1,30 @@
+schema_version: 1
+skill_name: book2skill
+built_at: 2026-07-30T00:00:00Z
+review_status: hand-authored
+sources:
+  - source_id: prd
+    title: "Book2Skill PRD v2.0-final"
+    author: Book2Skill project
+    edition: v2.0-final
+    content_sha256: hand-authored
+  - source_id: architecture
+    title: "Book2Skill Architecture"
+    author: Book2Skill project
+    edition: "1"
+    content_sha256: hand-authored
+  - source_id: skill-authoring-standard
+    title: "Generated Skill Authoring Standard"
+    author: Book2Skill project
+    edition: "1"
+    content_sha256: hand-authored
+  - source_id: skill-deployment
+    title: "Book2Skill Skill Deployment Steps"
+    author: Book2Skill project
+    edition: "1"
+    content_sha256: hand-authored
+  - source_id: cli
+    title: "Book2Skill CLI contract"
+    author: Book2Skill project
+    edition: "0.1.0"
+    content_sha256: hand-authored

@@ -1,0 +1,33 @@
+annotated-doc==0.0.4
+annotated-types==0.8.0
+attrs==26.1.0
+# Editable install with no version control (book2skill==0.1.0)
+-e d:\ai\01_book2skill
+colorama==0.4.6
+coverage==7.15.2
+iniconfig==2.3.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+librt==0.13.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+mypy==1.20.2
+mypy_extensions==1.1.0
+packaging==26.2
+pathspec==1.1.1
+pluggy==1.6.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+Pygments==2.20.0
+pytest==8.4.2
+pytest-cov==5.0.0
+PyYAML==6.0.3
+referencing==0.37.0
+rich==13.9.4
+rpds-py==2026.6.3
+ruff==0.16.0
+shellingham==1.5.4
+typer==0.27.0
+types-PyYAML==6.0.12.20260724
+typing-inspection==0.4.2
+typing_extensions==4.16.0

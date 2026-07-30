@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KnowledgeUnit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "unit_id",
+    "kind",
+    "content",
+    "source_refs",
+    "review_status",
+    "record_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "unit_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "framework",
+        "principle",
+        "technique",
+        "anti_pattern",
+        "term",
+        "case",
+        "checklist",
+        "decision_rule"
+      ]
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1
+    },
+    "conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "block_id"
+        ],
+        "properties": {
+          "source_id": {
+            "type": "string"
+          },
+          "block_id": {
+            "type": "string"
+          },
+          "quote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "review_status": {
+      "enum": [
+        "candidate",
+        "reviewed",
+        "approved",
+        "rejected",
+        "superseded"
+      ]
+    },
+    "record_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "supersedes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

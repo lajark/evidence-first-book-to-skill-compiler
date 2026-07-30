@@ -1,0 +1,10 @@
+schema_version: 1
+skill_name: <skill-name>
+built_at: <ISO-8601>
+review_status: candidate
+sources:
+  - source_id: <id>
+    title: <title>
+    author: <author-or-unknown>
+    edition: <edition-or-unknown>
+    content_sha256: <sha256>

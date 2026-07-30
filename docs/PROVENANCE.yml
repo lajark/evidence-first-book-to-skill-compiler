@@ -1,0 +1,58 @@
+schema_version: 1
+components:
+  - id: upstream-virgilio-book-to-skill
+    upstream_repo: https://github.com/virgiliojr94/book-to-skill
+    upstream_commit: 92b248fa5e7039d770d56630444310e36ff014e0
+    observed_license: MIT
+    observed_at: "2026-07-27"
+    reuse_type: selective_port
+    status: ported
+    candidate_areas: [extraction, operation_modes, validation, update]
+    files_ported:
+      - original_path: book_to_skill/sanitize.py
+        local_path: src/book2skill/extractors/_vendor/book_to_skill/sanitize.py
+        modifications: Added provenance header; no functional changes.
+      - original_path: book_to_skill/parsers/text.py
+        local_path: src/book2skill/extractors/_vendor/book_to_skill/text.py
+        modifications: Added provenance header; renamed module; no functional changes.
+      - original_path: book_to_skill/parsers/html.py
+        local_path: src/book2skill/extractors/_vendor/book_to_skill/html.py
+        modifications: >-
+          Added provenance header; adjusted import to use the vendored
+          `text` module within this package; removed unused stdlib `html`
+          import; no functional changes.
+      - original_path: book_to_skill/parsers/epub.py
+        local_path: src/book2skill/extractors/_vendor/book_to_skill/epub.py
+        modifications: >-
+          Added provenance header; adjusted import to use the vendored
+          `html` module within this package; no functional changes.
+      - original_path: book_to_skill/exceptions.py
+        local_path: src/book2skill/extractors/_vendor/book_to_skill/exceptions.py
+        modifications: Added provenance header; no functional changes.
+      - original_path: book_to_skill/parsers/docx.py
+        local_path: src/book2skill/extractors/_vendor/book_to_skill/docx.py
+        modifications: >-
+          Added provenance header; adjusted import to use the vendored
+          `exceptions` module within this package; removed the
+          `extract_docx` orchestrator and its `print` debug logging (backend
+          selection is handled by the DocxExtractor wrapper); no other
+          functional changes to extraction or validation logic.
+      - original_path: book_to_skill/parsers/pdf.py
+        local_path: src/book2skill/extractors/_vendor/book_to_skill/pdf.py
+        modifications: Added provenance header; no functional changes.
+      - original_path: book_to_skill/parsers/calibre.py
+        local_path: src/book2skill/extractors/_vendor/book_to_skill/calibre.py
+        modifications: >-
+          Added provenance header; replaced the upstream
+          `book_to_skill.config.OUTPUT_DIR` dependency with a per-call
+          tempfile so the function is self-contained; added best-effort
+          cleanup of the temp dir; no other functional changes to the
+          ebook-convert invocation.
+  - id: upstream-apple-ouyang-book-to-skill
+    upstream_repo: https://github.com/apple-ouyang/book-to-skill
+    upstream_commit: a24960ac89a3baa96a87cdf5ebaecf16c5d2eab1
+    observed_license: MIT
+    observed_at: "2026-07-27"
+    reuse_type: design_reference
+    status: no_code_imported_at_spec_stage
+    candidate_areas: [task_focused_skills, router, executable_examples]
