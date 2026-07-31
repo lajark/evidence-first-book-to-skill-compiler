@@ -30,10 +30,13 @@ def _make_blocks() -> list[TextBlock]:
 class TestAvailability:
     """Fallback behaviour when openai is not installed."""
 
-    def test_unavailable_without_package(self) -> None:
+    def test_adapter_with_api_key(self) -> None:
+        """With an api_key, availability depends on whether openai is installed."""
         adapter = OpenAIAdapter(api_key="sk-test")
-        # openai not installed → client is None.
-        assert adapter.is_available is False
+        import importlib.util
+
+        openai_installed = importlib.util.find_spec("openai") is not None
+        assert adapter.is_available is openai_installed
 
     def test_unavailable_without_api_key(self) -> None:
         adapter = OpenAIAdapter()
