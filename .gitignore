@@ -54,6 +54,10 @@ trae-project-rules-mirror.md
 # Stale config snippet
 .gitignore.snippet
 
+# SSH keys (local, never commit)
+ssh-key
+ssh-key.pub
+
 # Development process docs (keep at root for dev reference, exclude from git/release/install)
 PRD.md
 ARCHITECTURE.md
