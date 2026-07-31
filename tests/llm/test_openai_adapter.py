@@ -39,6 +39,16 @@ class TestAvailability:
         adapter = OpenAIAdapter()
         assert adapter.is_available is False
 
+    def test_no_crash_when_openai_rejects_missing_credentials(self) -> None:
+        """Constructing OpenAIAdapter without a key must not raise.
+
+        The OpenAI client raises OpenAIError on missing credentials; the
+        adapter must catch this and set _client=None (fall back to mock).
+        """
+        adapter = OpenAIAdapter()  # No api_key, no OPENAI_API_KEY env.
+        assert adapter._client is None  # noqa: SLF001
+        assert adapter.is_available is False
+
     def test_falls_back_to_mock_when_unavailable(self) -> None:
         adapter = OpenAIAdapter()
         blocks = _make_blocks()

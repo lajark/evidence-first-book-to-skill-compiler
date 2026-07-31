@@ -12,7 +12,10 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from bootstrap_self import run_bootstrap, _SOURCE_DOCS  # type: ignore[import-not-found]  # noqa: E402
+from bootstrap_self import (  # type: ignore[import-not-found]  # noqa: E402
+    _SOURCE_DOCS,
+    run_bootstrap,
+)
 
 
 def test_bootstrap_completes_and_produces_skill(tmp_path: Path) -> None:

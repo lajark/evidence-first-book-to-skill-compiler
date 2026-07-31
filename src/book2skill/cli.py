@@ -31,6 +31,7 @@ def _build_llm_adapter(
     *,
     model: str | None = None,
     base_url: str | None = None,
+    api_key: str | None = None,
 ) -> LLMAdapter:
     """Build an LLM adapter from CLI flags.
 
@@ -45,7 +46,11 @@ def _build_llm_adapter(
     if kind == "openai":
         from book2skill.llm.openai_adapter import OpenAIAdapter
 
-        return OpenAIAdapter(model=model or "gpt-4o", base_url=base_url)
+        return OpenAIAdapter(
+            model=model or "gpt-4o",
+            base_url=base_url,
+            api_key=api_key,
+        )
     raise typer.BadParameter(
         f"Unknown LLM adapter '{kind}'. Expected 'mock' or 'openai'."
     )
@@ -105,9 +110,16 @@ def analyze(
         "--llm-base-url",
         help="Base URL for OpenAI-compatible endpoint (e.g. http://localhost:11434/v1).",
     ),
+    llm_api_key: str | None = typer.Option(
+        None,
+        "--llm-api-key",
+        help="API key for the LLM endpoint. Falls back to OPENAI_API_KEY env var.",
+    ),
 ) -> None:
     """Analyze sources without generating a final Skill (FR-03-1)."""
-    adapter = _build_llm_adapter(llm, model=llm_model, base_url=llm_base_url)
+    adapter = _build_llm_adapter(
+        llm, model=llm_model, base_url=llm_base_url, api_key=llm_api_key
+    )
     use_case = AnalyzeUseCase(data_home=data_home, llm=adapter)
     result = use_case.execute(
         [str(s) for s in sources],
@@ -192,6 +204,11 @@ def batch(
         "--llm-base-url",
         help="Base URL for OpenAI-compatible endpoint.",
     ),
+    llm_api_key: str | None = typer.Option(
+        None,
+        "--llm-api-key",
+        help="API key for the LLM endpoint. Falls back to OPENAI_API_KEY env var.",
+    ),
     checkpoint: Path | None = typer.Option(
         None,
         "--checkpoint",
@@ -204,7 +221,9 @@ def batch(
     ),
 ) -> None:
     """Batch-analyze sources with per-file failure isolation (FR-02)."""
-    adapter = _build_llm_adapter(llm, model=llm_model, base_url=llm_base_url)
+    adapter = _build_llm_adapter(
+        llm, model=llm_model, base_url=llm_base_url, api_key=llm_api_key
+    )
     use_case = AnalyzeUseCase(data_home=data_home, llm=adapter)
     orchestrator = BatchOrchestrator(use_case=use_case)
 

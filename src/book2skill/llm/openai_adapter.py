@@ -60,7 +60,15 @@ class OpenAIAdapter:
         self._client = self._build_client()
 
     def _build_client(self) -> Any:
-        """Create the OpenAI client, or ``None`` if the package is missing."""
+        """Create the OpenAI client, or ``None`` if unavailable.
+
+        Returns ``None`` when the ``openai`` package is missing OR when no
+        API key is configured (the OpenAI client constructor raises
+        ``OpenAIError`` on missing credentials). In both cases the adapter
+        falls back to the mock adapter.
+        """
+        if not self._api_key:
+            return None
         try:
             from openai import OpenAI  # type: ignore[import-not-found]
         except ImportError:
@@ -68,7 +76,10 @@ class OpenAIAdapter:
         kwargs: dict[str, Any] = {"api_key": self._api_key}
         if self._base_url:
             kwargs["base_url"] = self._base_url
-        return OpenAI(**kwargs)
+        try:
+            return OpenAI(**kwargs)
+        except Exception:
+            return None
 
     @property
     def is_available(self) -> bool:
