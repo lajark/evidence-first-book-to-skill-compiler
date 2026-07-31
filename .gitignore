@@ -53,3 +53,20 @@ trae-project-rules-mirror.md
 
 # Stale config snippet
 .gitignore.snippet
+
+# Development process docs (keep at root for dev reference, exclude from git/release/install)
+PRD.md
+ARCHITECTURE.md
+DATA_MODEL.md
+FORMAT_ADAPTERS.md
+IMPLEMENTATION_PLAN.md
+ACCEPTANCE_TEST_PLAN.md
+TASKS.md
+TODO.md
+TRACEABILITY_MATRIX.md
+SKILL_AUTHORING_STANDARD.md
+SKILL_DEPLOYMENT.md
+OPEN_SOURCE_REUSE_POLICY.md
+PACKAGE_MANIFEST.md
+GITEE_PRIVATE_REPO.md
+AGENTS_BASELINE.md
