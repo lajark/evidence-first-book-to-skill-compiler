@@ -26,10 +26,10 @@ from pathlib import Path
 
 # Source docs that describe how Book2Skill itself works.
 _SOURCE_DOCS: tuple[str, ...] = (
-    "docs/development/PRD.md",
-    "docs/development/ARCHITECTURE.md",
-    "docs/development/DATA_MODEL.md",
-    "docs/development/SKILL_AUTHORING_STANDARD.md",
+    "PRD.md",
+    "ARCHITECTURE.md",
+    "DATA_MODEL.md",
+    "SKILL_AUTHORING_STANDARD.md",
     "AGENTS.md",
 )
 

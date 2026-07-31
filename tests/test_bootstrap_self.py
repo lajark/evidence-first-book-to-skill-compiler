@@ -5,17 +5,31 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 # Ensure scripts/ is importable.
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from bootstrap_self import run_bootstrap  # type: ignore[import-not-found]  # noqa: E402
+from bootstrap_self import run_bootstrap, _SOURCE_DOCS  # type: ignore[import-not-found]  # noqa: E402
 
 
 def test_bootstrap_completes_and_produces_skill(tmp_path: Path) -> None:
-    """The pipeline can compile Book2Skill's own docs into a Skill."""
+    """The pipeline can compile Book2Skill's own docs into a Skill.
+
+    Skipped when source docs are not present (e.g., clean install without
+    development process docs).
+    """
     project_root = Path(__file__).resolve().parent.parent
+
+    # Check if all source docs exist before running.
+    missing = [doc for doc in _SOURCE_DOCS if not (project_root / doc).exists()]
+    if missing:
+        pytest.skip(
+            f"Bootstrap source docs not present (clean install): {missing}"
+        )
+
     result = run_bootstrap(project_root, output_dir=tmp_path)
 
     assert result["success"] is True
