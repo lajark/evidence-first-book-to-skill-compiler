@@ -46,4 +46,10 @@ Thumbs.db
 .vscode/
 .idea/
 trae-project-rules-mirror.md
-ssh-key*
+
+# Process notes (root-level only, not deliverables)
+/*.txt
+!requirements-lock.txt
+
+# Stale config snippet
+.gitignore.snippet

@@ -219,7 +219,7 @@ Adapters
 
 **关键数据流**：合法性确认 → Raw 固化与哈希 → 格式抽取 → Schema/IR 结构化 → Analyze/Build → Wiki/Skill 编译 → 安全校验 → 原子发布/部署
 
-详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+详见 [docs/development/ARCHITECTURE.md](docs/development/ARCHITECTURE.md)。
 
 ## 测试与质量
 
@@ -260,22 +260,29 @@ Book2Skill 生成的 Skill 可安装到 5 个宿主：
 
 所有宿主：升级前自动备份旧版本到 `~/.book2skill/backups/`，卸载只删除 Skill 目录（不触碰 workspace/raw/backups）。
 
-详见 [SKILL_DEPLOYMENT.md](SKILL_DEPLOYMENT.md)。
+详见 [docs/development/SKILL_DEPLOYMENT.md](docs/development/SKILL_DEPLOYMENT.md)。
 
 ## 项目文档
 
 | 文档 | 说明 |
 |------|------|
-| [PRD.md](PRD.md) | 产品需求文档 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 架构设计 |
-| [DATA_MODEL.md](DATA_MODEL.md) | 数据模型 |
-| [AGENTS.md](AGENTS.md) | 项目规则与命令 |
-| [FORMAT_ADAPTERS.md](FORMAT_ADAPTERS.md) | 格式适配器规格 |
-| [SKILL_AUTHORING_STANDARD.md](SKILL_AUTHORING_STANDARD.md) | Skill 编写标准 |
-| [SKILL_DEPLOYMENT.md](SKILL_DEPLOYMENT.md) | 部署手册 |
+| [README.md](README.md) | 本文件 — 安装与使用说明 |
 | [SECURITY.md](SECURITY.md) | 安全策略 |
-| [OPEN_SOURCE_REUSE_POLICY.md](OPEN_SOURCE_REUSE_POLICY.md) | 上游复用政策 |
-| [TODO.md](TODO.md) | 任务清单与里程碑 |
+| [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 第三方许可证通知 |
+| [AGENTS.md](AGENTS.md) | AI 开发工具项目规则 |
+| **开发文档**（`docs/development/`） | |
+| [PRD.md](docs/development/PRD.md) | 产品需求文档 |
+| [ARCHITECTURE.md](docs/development/ARCHITECTURE.md) | 架构设计 |
+| [DATA_MODEL.md](docs/development/DATA_MODEL.md) | 数据模型 |
+| [FORMAT_ADAPTERS.md](docs/development/FORMAT_ADAPTERS.md) | 格式适配器规格 |
+| [SKILL_AUTHORING_STANDARD.md](docs/development/SKILL_AUTHORING_STANDARD.md) | Skill 编写标准 |
+| [SKILL_DEPLOYMENT.md](docs/development/SKILL_DEPLOYMENT.md) | 部署手册 |
+| [OPEN_SOURCE_REUSE_POLICY.md](docs/development/OPEN_SOURCE_REUSE_POLICY.md) | 上游复用政策 |
+| [TODO.md](docs/development/TODO.md) | 任务清单与里程碑 |
+| [TASKS.md](docs/development/TASKS.md) | 任务定义 |
+| [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.md) | 实施计划 |
+| [ACCEPTANCE_TEST_PLAN.md](docs/development/ACCEPTANCE_TEST_PLAN.md) | 验收测试计划 |
+| [TRACEABILITY_MATRIX.md](docs/development/TRACEABILITY_MATRIX.md) | 追踪矩阵 |
 
 ## 许可证与致谢
 

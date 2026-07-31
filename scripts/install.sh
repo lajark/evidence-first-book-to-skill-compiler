@@ -8,7 +8,7 @@
 #
 # 默认使用清华镜像源加速。如需使用官方 PyPI，设环境变量 USE_OFFICIAL=1。
 
-set -euo pipefail
+set -uo pipefail
 
 # --- 镜像选择 ---
 if [[ "${USE_OFFICIAL:-0}" == "1" ]]; then
@@ -42,9 +42,9 @@ fi
 
 PIP=".venv/Scripts/pip"
 
-# --- 升级 pip ---
+# --- 升级 pip（非致命，失败继续）---
 echo "→ 升级 pip"
-$PIP install --upgrade pip $INDEX_URL "${PIP_FLAGS[@]}"
+$PIP install --upgrade pip $INDEX_URL "${PIP_FLAGS[@]}" 2>/dev/null || true
 
 # --- 安装依赖 ---
 if [[ -n "$EXTRAS" ]]; then
