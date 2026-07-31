@@ -45,15 +45,24 @@ Book2Skill 是一个 Python CLI 工具，把书籍和长文档编译为符合 [A
 ### 安装方式
 
 ```bash
-# 方式一：pip 可编辑安装（推荐开发使用）
-pip install -e ".[dev]"
+# 方式一：一键安装脚本（国内用户推荐，自动使用清华镜像）
+bash scripts/install.sh                # 全部依赖（含可选分组 + dev）
+bash scripts/install.sh --no-dev      # 运行时 + 可选，不含 dev
+bash scripts/install.sh --core         # 仅核心运行时
 
-# 方式二：仅安装运行时
-pip install .
+# 方式二：手动 pip（国际源）
+pip install -e ".[pdf,epub,docx,html,ocr,dev]"
 
-# 方式三：uv（如已安装）
+# 方式三：手动 pip + 国内镜像（解决超时）
+pip install -e ".[pdf,epub,docx,html,ocr,dev]" \
+  -i https://pypi.tuna.tsinghua.edu.cn/simple \
+  --trusted-host pypi.tuna.tsinghua.edu.cn
+
+# 方式四：uv（如已安装）
 uv sync --all-extras
 ```
+
+> **国内用户**：如遇 `Connection timed out` 或 `Could not find a version` 报错，使用方式一（脚本自动配镜像）或方式三（手动指定镜像）。设 `USE_OFFICIAL=1` 可切换回官方 PyPI。
 
 ### 可选依赖分组
 
