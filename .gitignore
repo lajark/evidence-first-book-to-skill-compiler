@@ -8,11 +8,10 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-
-# Test/coverage artifacts
+# coverage artifacts
 .coverage
-htmlcov/
 coverage.xml
+htmlcov/
 
 # Local config and secrets
 .env
@@ -20,10 +19,6 @@ coverage.xml
 !.env.example
 config.local.*
 secrets/
-CLAUDE.local.md
-
-# AI assistant config (local, not deliverable)
-.claude/
 
 # Copyright/personal data
 workspace/
@@ -34,43 +29,30 @@ library/raw/
 *.azw
 *.azw3
 
-# SQLite databases (runtime artifacts)
-*.db
-
-# Acceptance run artifacts (regenerable)
-workspace/acceptance/
-
 # IDE/OS
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-trae-project-rules-mirror.md
 
-# Process notes (root-level only, not deliverables)
-/*.txt
-!requirements-lock.txt
+# Multi-agent local settings and process outputs
+CLAUDE.local.md
+.claude/settings.local.json
+.workspace/tmp/
+.workspace/logs/
+.workspace/cache/
+*.pem
+*.key
 
-# Stale config snippet
-.gitignore.snippet
-
-# SSH keys (local, never commit)
+# Local-only tool adapters and personal notes (not deliverables)
+.claude/
 ssh-key
 ssh-key.pub
-
-# Development process docs (keep at root for dev reference, exclude from git/release/install)
-PRD.md
-ARCHITECTURE.md
-DATA_MODEL.md
-FORMAT_ADAPTERS.md
-IMPLEMENTATION_PLAN.md
-ACCEPTANCE_TEST_PLAN.md
-TASKS.md
-TODO.md
-TRACEABILITY_MATRIX.md
-SKILL_AUTHORING_STANDARD.md
-SKILL_DEPLOYMENT.md
-OPEN_SOURCE_REUSE_POLICY.md
-PACKAGE_MANIFEST.md
-GITEE_PRIVATE_REPO.md
 AGENTS_BASELINE.md
+trae-project-rules-mirror.md
+/TODO.md
+/.gitignore.snippet
+/补充说明.txt
+
+# User import archives / spec packages
+*.zip

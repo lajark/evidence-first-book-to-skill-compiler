@@ -47,6 +47,11 @@ from book2skill.application.analyze import AnalyzeUseCase
 from book2skill.application.candidates import candidate_to_unit
 from book2skill.application.gate import GateError
 from book2skill.application.models import AnalysisBundle
+from book2skill.application.progress import (
+    STAGE_COMPILE,
+    ProgressReporter,
+    noop_progress,
+)
 from book2skill.application.publisher import SkillMeta
 from book2skill.compiler import IRBuilder, SkillIR, SkillSpec, SkillWriter
 from book2skill.compiler.ir_builder import WorkflowStep
@@ -129,6 +134,7 @@ class BuildUseCase:
         collection_id: str | None = None,
         rights_note: str | None = None,
         output_dir: Path | None = None,
+        on_progress: ProgressReporter | None = None,
     ) -> BuildResult:
         """Full Build: sources → analyze → schema → ir → skill directory.
 
@@ -142,14 +148,18 @@ class BuildUseCase:
                 Analyze stage.
             output_dir: Where to write the Skill directory. Defaults to
                 ``workspace/skills/<spec.name>`` under the cwd.
+            on_progress: Optional stage-progress callback (UI-neutral),
+                forwarded to the Analyze stage and used for the compile tail.
 
         Returns:
             A :class:`BuildResult` with ``skill_dir`` set on success.
         """
+        reporter = on_progress or noop_progress
         analyze_result = self._analyze.execute(
             inputs,
             collection_id=collection_id,
             rights_note=rights_note,
+            on_progress=reporter,
         )
         if analyze_result.bundle is None:
             return BuildResult(errors=analyze_result.errors)
@@ -157,13 +167,16 @@ class BuildUseCase:
         bundle = analyze_result.bundle
         manifests = self._collect_manifests(bundle.source_ids)
 
-        return self._compile_bundle(
+        reporter(STAGE_COMPILE, 0, 1, spec.name)
+        result = self._compile_bundle(
             bundle=bundle,
             spec=spec,
             output_dir=output_dir,
             source_manifests=manifests,
             errors=analyze_result.errors,
         )
+        reporter(STAGE_COMPILE, 1, 1, spec.name)
+        return result
 
     def build_from_bundle(
         self,
@@ -171,6 +184,7 @@ class BuildUseCase:
         spec: SkillSpec,
         *,
         output_dir: Path | None = None,
+        on_progress: ProgressReporter | None = None,
     ) -> BuildResult:
         """Build from Analysis: load bundle.json → compile tail.
 
@@ -181,12 +195,15 @@ class BuildUseCase:
                 candidate units.
             spec: Human-authored Skill shape.
             output_dir: Where to write the Skill directory.
+            on_progress: Optional stage-progress callback (UI-neutral), used
+                for the compile tail.
 
         Raises:
             DomainError: With :data:`ErrorCode.BUILD_INPUT_INVALID` when the
                 file is missing, not valid JSON, or the bundle has no
                 candidate units / no source_ids.
         """
+        reporter = on_progress or noop_progress
         if not bundle_path.exists():
             raise DomainError(
                 code=ErrorCode.BUILD_INPUT_INVALID,
@@ -226,13 +243,16 @@ class BuildUseCase:
 
         # Build from Analysis has no RawStorage handle; manifests stay empty
         # and provenance falls back to ``unknown`` metadata.
-        return self._compile_bundle(
+        reporter(STAGE_COMPILE, 0, 1, spec.name)
+        result = self._compile_bundle(
             bundle=bundle,
             spec=spec,
             output_dir=output_dir,
             source_manifests=[],
             errors=[],
         )
+        reporter(STAGE_COMPILE, 1, 1, spec.name)
+        return result
 
     # ------------------------------------------------------------------
     # Compile tail (shared by both entry points)

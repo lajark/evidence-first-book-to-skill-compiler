@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Book2SkillExtensionManifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "extension_id",
+    "version",
+    "requires",
+    "entry_points",
+    "contributes",
+    "permissions",
+    "checksums_file"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "extension_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "requires": {
+      "type": "object",
+      "required": [
+        "book2skill",
+        "extensions"
+      ],
+      "properties": {
+        "book2skill": {
+          "type": "string"
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "extension_id",
+              "version"
+            ],
+            "properties": {
+              "extension_id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "entry_points": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "contributes": {
+      "type": "object"
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "migrations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "checksums_file": {
+      "const": "checksums.sha256"
+    }
+  },
+  "additionalProperties": true
+}

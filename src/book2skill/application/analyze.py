@@ -12,6 +12,8 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from book2skill.application.gate import DiscoveredFile, Gate, GateError
 from book2skill.application.models import (
     AnalysisBundle,
@@ -20,6 +22,14 @@ from book2skill.application.models import (
     ReviewItem,
     StructureEntry,
     SuggestedSkill,
+)
+from book2skill.application.progress import (
+    STAGE_CANDIDATES,
+    STAGE_EXTRACT,
+    STAGE_SKILLS,
+    STAGE_STRUCTURE,
+    ProgressReporter,
+    noop_progress,
 )
 from book2skill.domain import (
     ConflictStatus,
@@ -85,6 +95,7 @@ class AnalyzeUseCase:
         *,
         collection_id: str | None = None,
         rights_note: str | None = None,
+        on_progress: ProgressReporter | None = None,
     ) -> AnalyzeResult:
         """Run the full Analyze pipeline on *inputs*.
 
@@ -94,18 +105,23 @@ class AnalyzeUseCase:
                 omitted.
             rights_note: Optional rights-confirmation note recorded on every
                 manifest.
+            on_progress: Optional stage-progress callback (UI-neutral). When
+                omitted the pipeline runs silently.
 
         Returns:
             An :class:`AnalyzeResult` with the bundle and/or discovery errors.
         """
+        reporter = on_progress or noop_progress
         files, gate_errors = self._gate.discover(inputs)
         if not files:
             return AnalyzeResult(bundle=None, errors=gate_errors)
 
         all_blocks: list[tuple[TextBlock, str]] = []  # (block, source_id)
         source_ids: list[str] = []
+        total_files = len(files)
 
-        for f in files:
+        for i, f in enumerate(files, start=1):
+            reporter(STAGE_EXTRACT, i, total_files, Path(f.path).name)
             extractor = self._registry.get(f.format)
             if extractor is None:
                 gate_errors.append(
@@ -148,6 +164,7 @@ class AnalyzeUseCase:
             source_ids=source_ids,
             all_blocks=all_blocks,
             collection_id=collection_id,
+            on_progress=reporter,
         )
         return AnalyzeResult(bundle=bundle, errors=gate_errors)
 
@@ -159,21 +176,35 @@ class AnalyzeUseCase:
         source_ids: list[str],
         all_blocks: list[tuple[TextBlock, str]],
         collection_id: str | None,
+        on_progress: ProgressReporter | None = None,
     ) -> AnalysisBundle:
+        reporter = on_progress or noop_progress
         coll_id = collection_id or _derive_collection_id(source_ids)
 
         structure: list[StructureEntry] = []
         candidates: list[CandidateUnit] = []
         review_queue: list[ReviewItem] = []
+        total_blocks = len(all_blocks)
 
-        for block, source_id in all_blocks:
+        for idx, (block, source_id) in enumerate(all_blocks, start=1):
+            reporter(STAGE_STRUCTURE, idx, total_blocks, source_id)
             struct_entries = self._llm.analyze_structure(source_id, [block])
             for s in struct_entries:
-                structure.append(StructureEntry.model_validate(s))
+                # Tolerate residual schema deviations the adapter could not
+                # coerce: skip a single malformed entry rather than crashing
+                # the whole pipeline (graceful degradation contract).
+                try:
+                    structure.append(StructureEntry.model_validate(s))
+                except ValidationError:
+                    continue
 
+            reporter(STAGE_CANDIDATES, idx, total_blocks, source_id)
             cands = self._llm.extract_candidates(source_id, [block])
             for c in cands:
-                candidate = CandidateUnit.model_validate(c)
+                try:
+                    candidate = CandidateUnit.model_validate(c)
+                except ValidationError:
+                    continue
                 candidates.append(candidate)
                 self._maybe_flag(candidate, review_queue)
 
@@ -181,12 +212,17 @@ class AnalyzeUseCase:
 
         suggested: list[SuggestedSkill] = []
         if candidates:
-            for source_id in source_ids:
+            total_sources = len(source_ids)
+            for idx, source_id in enumerate(source_ids, start=1):
+                reporter(STAGE_SKILLS, idx, total_sources, source_id)
                 source_cands = [
                     c.model_dump(mode="json") for c in candidates
                 ]
                 for suggestion in self._llm.suggest_skills(source_id, source_cands):
-                    suggested.append(SuggestedSkill.model_validate(suggestion))
+                    try:
+                        suggested.append(SuggestedSkill.model_validate(suggestion))
+                    except ValidationError:
+                        continue
 
         return AnalysisBundle(
             collection_id=coll_id,

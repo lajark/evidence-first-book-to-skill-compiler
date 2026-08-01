@@ -185,6 +185,79 @@ class TestMockedClient:
         # Falls back to mock output.
         assert result == mock.extract_candidates("src1", blocks)
 
+
+class TestOutputNormalization:
+    """The adapter coerces common LLM schema deviations so the pipeline
+    does not crash on real models (e.g. locator as a string,
+    review_status='pending', record_version='1.0').
+    """
+
+    def _make_adapter(self, response_text: str) -> OpenAIAdapter:
+        adapter = OpenAIAdapter.__new__(OpenAIAdapter)
+        adapter._model = "test-model"
+        adapter._api_key = "sk-test"
+        adapter._base_url = None
+        adapter._mock = MockLLMAdapter()
+        fake_choice = MagicMock()
+        fake_choice.message.content = response_text
+        fake_resp = MagicMock()
+        fake_resp.choices = [fake_choice]
+        fake_client = MagicMock()
+        fake_client.chat.completions.create.return_value = fake_resp
+        adapter._client = fake_client
+        return adapter
+
+    def test_structure_coerces_string_locator(self) -> None:
+        from book2skill.application.models import StructureEntry
+
+        raw = json.dumps(
+            [
+                {
+                    "block_id": "1",
+                    "locator": "line 1",  # string instead of dict
+                    "heading": "Intro",
+                    "level": "9",  # out-of-range string
+                    "text_preview": "preview",
+                }
+            ]
+        )
+        adapter = self._make_adapter(raw)
+        result = adapter.analyze_structure("src1", _make_blocks())
+        assert len(result) == 1
+        entry = result[0]
+        assert isinstance(entry["locator"], dict)
+        assert entry["level"] == 6  # clamped into 1-6
+        # The coerced entry must validate against the strict model.
+        StructureEntry.model_validate(entry)
+
+    def test_candidate_coerces_review_status_and_record_version(self) -> None:
+        from book2skill.application.models import CandidateUnit
+
+        raw = json.dumps(
+            [
+                {
+                    "unit_id": "cu-1",
+                    "kind": "principle",
+                    "content": "A real principle worth extracting.",
+                    "source_refs": [
+                        {"source_id": "src1", "block_id": "1", "quote": "x"}
+                    ],
+                    "confidence": "0.9",  # string
+                    "review_status": "pending",  # not in allowed set
+                    "record_version": "1.0",  # float-as-string
+                }
+            ]
+        )
+        adapter = self._make_adapter(raw)
+        result = adapter.extract_candidates("src1", _make_blocks())
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["review_status"] == "candidate"
+        assert entry["record_version"] == 1
+        assert entry["confidence"] == 0.9
+        # The coerced entry must validate against the strict model.
+        CandidateUnit.model_validate(entry)
+
     def test_llm_exception_falls_back_to_mock(self) -> None:
         adapter = OpenAIAdapter.__new__(OpenAIAdapter)
         adapter._model = "test-model"

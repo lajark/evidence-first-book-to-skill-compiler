@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Book2SkillReleaseManifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "product",
+    "version",
+    "python_requires",
+    "artifacts",
+    "sdk_version",
+    "extension_schema_versions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "product": {
+      "const": "book2skill-core"
+    },
+    "version": {
+      "type": "string"
+    },
+    "python_requires": {
+      "type": "string"
+    },
+    "sdk_version": {
+      "type": "string"
+    },
+    "extension_schema_versions": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "object"
+    },
+    "licenses": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}

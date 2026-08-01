@@ -12,6 +12,10 @@ limits:
   max_direct_quote_words: 25
   skill_target_tokens: 4000
   reference_target_tokens: 1500
+extensions:
+  registry_dir: null
+  allow_unsigned: false
+  supported_manifest_versions: [1]
 hosts:
   - claude
   - trae

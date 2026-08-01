@@ -2,20 +2,40 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import types
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+)
 
 from book2skill import __version__
 from book2skill.application.analyze import AnalyzeUseCase
 from book2skill.application.batch import BatchOrchestrator
 from book2skill.application.build import BuildUseCase
 from book2skill.application.diff import DiffEngine, load_diff_input
+from book2skill.application.progress import (
+    STAGE_CANDIDATES,
+    STAGE_COMPILE,
+    STAGE_EXTRACT,
+    STAGE_SKILLS,
+    STAGE_STRUCTURE,
+    ProgressReporter,
+)
 from book2skill.application.update import UpdateUseCase
 from book2skill.compiler import SkillSpec
+from book2skill.config import load_env_file
 from book2skill.domain.errors import DomainError
+from book2skill.extensions.cli import extensions_app
 from book2skill.hosts import HOST_KINDS, get_installer
 from book2skill.llm.ports import LLMAdapter
 from book2skill.storage.override_storage import OverrideStorage
@@ -23,36 +43,152 @@ from book2skill.storage.schema_storage import KnowledgeSchemaStorage
 from book2skill.validation import QualityReportWriter, Validator
 
 app = typer.Typer(name="book2skill", help="Book2Skill CLI")
+
+
+def _write_stdout_utf8(text: str) -> None:
+    """Write *text* to stdout as UTF-8, independent of the console code page.
+
+    ``sys.stdout.write`` re-encodes through the platform default (GBK on
+    Windows), which raises ``UnicodeEncodeError`` for characters it cannot
+    represent (e.g. U+2022) when dumping ``ensure_ascii=False`` JSON. Writing
+    UTF-8 bytes to the underlying buffer (when present) avoids that. Falls back
+    to text writes for in-memory streams without a ``.buffer`` (e.g. capsys).
+    """
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        buffer.write(text.encode("utf-8"))
+        buffer.flush()
+    else:
+        sys.stdout.write(text)
+app.add_typer(extensions_app)
 console = Console()
+
+# Progress goes to stderr so ``--json`` stdout stays clean for piping.
+_stderr_console = Console(stderr=True)
+
+#: Map stage codes to localized labels for the progress bar.
+_STAGE_LABELS: dict[str, str] = {
+    STAGE_EXTRACT: "提取文本",
+    STAGE_STRUCTURE: "结构分析 (LLM)",
+    STAGE_CANDIDATES: "候选抽取 (LLM)",
+    STAGE_SKILLS: "Skill 建议 (LLM)",
+    STAGE_COMPILE: "编译 Skill",
+}
+
+
+def _stage_label(stage: str, detail: str) -> str:
+    """Build the progress-bar description for a stage step."""
+    label = _STAGE_LABELS.get(stage, stage)
+    if detail:
+        return f"{label}: {detail}"
+    return label
+
+
+class _ProgressCtx:
+    """Context manager that drives a Rich progress bar on stderr.
+
+    When stdout is not a TTY (CI, redirect) Rich disables live rendering and
+    prints periodic lines instead, so progress still surfaces without garbling
+    captured output. The progress bar always targets stderr.
+    """
+
+    def __init__(self, title: str) -> None:
+        self._progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TaskProgressColumn(),
+            console=_stderr_console,
+            transient=False,
+        )
+        self._title = title
+        self._task: int | None = None
+
+    def __enter__(self) -> ProgressReporter:
+        self._progress.__enter__()
+        self._task = self._progress.add_task(self._title, total=1)
+        task_id = self._task
+
+        def _report(stage: str, current: int, total: int, detail: str = "") -> None:
+            assert task_id is not None
+            self._progress.update(
+                task_id,
+                description=_stage_label(stage, detail),
+                total=max(total, 1),
+                completed=current,
+            )
+
+        return _report
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        self._progress.__exit__(exc_type, exc_val, exc_tb)
 
 
 def _build_llm_adapter(
-    kind: str,
+    kind: str | None,
     *,
     model: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
 ) -> LLMAdapter:
-    """Build an LLM adapter from CLI flags.
+    """Build an LLM adapter from CLI flags, env vars, and a ``.env`` file.
 
-    Returns a MockLLMAdapter (default) or an OpenAIAdapter. The OpenAIAdapter
+    Lookup priority for every setting is:
+    CLI flag > system environment variable > ``.env`` file > built-in default.
+    Within the env layer, the generic ``LLM_*`` keys take precedence over the
+    legacy ``OPENAI_*`` keys (both remain supported).
+
+    *kind* accepts ``mock`` (default, offline), ``openai``, or the generic
+    alias ``compatible`` — the latter two both build an
+    :class:`~book2skill.llm.openai_adapter.OpenAIAdapter`, which speaks the
+    OpenAI-compatible chat API and works with any such endpoint (OpenAI,
+    Azure, 阿里云百炼/DashScope, Ollama, vLLM, LM Studio, ...). The adapter
     gracefully falls back to the mock when the ``openai`` package is missing
-    or no API key is set.
+    or no API key is set, so the pipeline never crashes offline.
     """
-    if kind == "mock":
+    env_file = load_env_file()
+
+    def _pick(
+        flag: str | None, env_keys: list[str], default: str | None = None
+    ) -> str | None:
+        if flag:
+            return flag
+        # System environment first (generic LLM_* preferred over OPENAI_*).
+        for key in env_keys:
+            shell = os.environ.get(key)
+            if shell:
+                return shell
+        # Then the .env file (same key order).
+        for key in env_keys:
+            if key in env_file:
+                return env_file[key]
+        return default
+
+    resolved_kind = _pick(kind, ["BOOK2SKILL_LLM"], "mock") or "mock"
+    if resolved_kind == "mock":
         from book2skill.llm.mock_adapter import MockLLMAdapter
 
         return MockLLMAdapter()
-    if kind == "openai":
+    if resolved_kind in ("openai", "compatible"):
         from book2skill.llm.openai_adapter import OpenAIAdapter
 
+        resolved_model = _pick(model, ["LLM_MODEL", "OPENAI_MODEL"]) or "gpt-4o"
+        resolved_base_url = _pick(base_url, ["LLM_BASE_URL", "OPENAI_BASE_URL"])
+        resolved_api_key = _pick(api_key, ["LLM_API_KEY", "OPENAI_API_KEY"])
         return OpenAIAdapter(
-            model=model or "gpt-4o",
-            base_url=base_url,
-            api_key=api_key,
+            model=resolved_model,
+            base_url=resolved_base_url,
+            api_key=resolved_api_key,
         )
     raise typer.BadParameter(
-        f"Unknown LLM adapter '{kind}'. Expected 'mock' or 'openai'."
+        f"Unknown LLM adapter '{resolved_kind}'. "
+        "Expected 'mock', 'openai', or 'compatible'."
     )
 
 
@@ -95,25 +231,32 @@ def analyze(
         "--data-home",
         help="Directory for raw storage (default: in-memory).",
     ),
-    llm: str = typer.Option(
-        "mock",
+    llm: str | None = typer.Option(
+        None,
         "--llm",
-        help="LLM adapter: 'mock' (offline, default) or 'openai'.",
+        help="LLM adapter: 'mock' (offline, default) or 'openai'/'compatible' "
+        "(any OpenAI-compatible endpoint). "
+        "Falls back to BOOK2SKILL_LLM env var / .env file.",
     ),
     llm_model: str | None = typer.Option(
         None,
         "--llm-model",
-        help="Model name for the openai adapter (e.g. gpt-4o).",
+        help="Model name (e.g. gpt-4o, qwen-plus). "
+        "Falls back to LLM_MODEL / OPENAI_MODEL env var / .env file.",
     ),
     llm_base_url: str | None = typer.Option(
         None,
         "--llm-base-url",
-        help="Base URL for OpenAI-compatible endpoint (e.g. http://localhost:11434/v1).",
+        help="Base URL for an OpenAI-compatible endpoint "
+        "(e.g. http://localhost:11434/v1 or "
+        "https://dashscope.aliyuncs.com/compatible-mode/v1). "
+        "Falls back to LLM_BASE_URL / OPENAI_BASE_URL env var / .env file.",
     ),
     llm_api_key: str | None = typer.Option(
         None,
         "--llm-api-key",
-        help="API key for the LLM endpoint. Falls back to OPENAI_API_KEY env var.",
+        help="API key for the LLM endpoint. "
+        "Falls back to LLM_API_KEY / OPENAI_API_KEY env var / .env file.",
     ),
 ) -> None:
     """Analyze sources without generating a final Skill (FR-03-1)."""
@@ -121,11 +264,13 @@ def analyze(
         llm, model=llm_model, base_url=llm_base_url, api_key=llm_api_key
     )
     use_case = AnalyzeUseCase(data_home=data_home, llm=adapter)
-    result = use_case.execute(
-        [str(s) for s in sources],
-        collection_id=collection_id,
-        rights_note=rights_note,
-    )
+    with _ProgressCtx("Analyzing...") as on_progress:
+        result = use_case.execute(
+            [str(s) for s in sources],
+            collection_id=collection_id,
+            rights_note=rights_note,
+            on_progress=on_progress,
+        )
 
     if result.errors:
         for err in result.errors:
@@ -144,7 +289,7 @@ def analyze(
         bundle_json = json.dumps(
             result.bundle.model_dump(mode="json"), indent=2, ensure_ascii=False
         )
-        sys.stdout.write(bundle_json + "\n")
+        _write_stdout_utf8(bundle_json + "\n")
     else:
         b = result.bundle
         console.print(
@@ -189,25 +334,32 @@ def batch(
         "--data-home",
         help="Directory for raw storage (default: in-memory).",
     ),
-    llm: str = typer.Option(
-        "mock",
+    llm: str | None = typer.Option(
+        None,
         "--llm",
-        help="LLM adapter: 'mock' (offline, default) or 'openai'.",
+        help="LLM adapter: 'mock' (offline, default) or 'openai'/'compatible' "
+        "(any OpenAI-compatible endpoint). "
+        "Falls back to BOOK2SKILL_LLM env var / .env file.",
     ),
     llm_model: str | None = typer.Option(
         None,
         "--llm-model",
-        help="Model name for the openai adapter.",
+        help="Model name (e.g. gpt-4o, qwen-plus). "
+        "Falls back to LLM_MODEL / OPENAI_MODEL env var / .env file.",
     ),
     llm_base_url: str | None = typer.Option(
         None,
         "--llm-base-url",
-        help="Base URL for OpenAI-compatible endpoint.",
+        help="Base URL for an OpenAI-compatible endpoint "
+        "(e.g. http://localhost:11434/v1 or "
+        "https://dashscope.aliyuncs.com/compatible-mode/v1). "
+        "Falls back to LLM_BASE_URL / OPENAI_BASE_URL env var / .env file.",
     ),
     llm_api_key: str | None = typer.Option(
         None,
         "--llm-api-key",
-        help="API key for the LLM endpoint. Falls back to OPENAI_API_KEY env var.",
+        help="API key for the LLM endpoint. "
+        "Falls back to LLM_API_KEY / OPENAI_API_KEY env var / .env file.",
     ),
     checkpoint: Path | None = typer.Option(
         None,
@@ -247,7 +399,7 @@ def batch(
         batch_json = json.dumps(
             result.model_dump(mode="json"), indent=2, ensure_ascii=False
         )
-        sys.stdout.write(batch_json + "\n")
+        _write_stdout_utf8(batch_json + "\n")
     else:
         s = result.summary
         console.print(
@@ -357,18 +509,23 @@ def build(
     use_case = BuildUseCase(data_home=data_home)
 
     try:
-        if from_analysis is not None:
-            result = use_case.build_from_bundle(
-                from_analysis, spec, output_dir=output_dir
-            )
-        else:
-            assert sources is not None  # narrowed by the guard above
-            result = use_case.build_from_sources(
-                [str(s) for s in sources],
-                spec,
-                rights_note=rights_note,
-                output_dir=output_dir,
-            )
+        with _ProgressCtx("Building skill...") as on_progress:
+            if from_analysis is not None:
+                result = use_case.build_from_bundle(
+                    from_analysis,
+                    spec,
+                    output_dir=output_dir,
+                    on_progress=on_progress,
+                )
+            else:
+                assert sources is not None  # narrowed by the guard above
+                result = use_case.build_from_sources(
+                    [str(s) for s in sources],
+                    spec,
+                    rights_note=rights_note,
+                    output_dir=output_dir,
+                    on_progress=on_progress,
+                )
     except DomainError as exc:
         console.print(
             f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
@@ -396,7 +553,7 @@ def build(
             "source_count": len(result.source_manifests),
             "warnings": len(result.errors),
         }
-        sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        _write_stdout_utf8(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
     else:
         console.print(
             f"[green]Build complete[/green] — skill: {result.skill_dir}"
@@ -507,7 +664,7 @@ def update(
                 ),
                 "published_at": record.published_at,
             }
-            sys.stdout.write(
+            _write_stdout_utf8(
                 json.dumps(rb_payload, indent=2, ensure_ascii=False) + "\n"
             )
         else:
@@ -575,7 +732,7 @@ def update(
                 str(rec.snapshot_path) if rec.snapshot_path else None
             )
             payload["published_at"] = rec.published_at
-        sys.stdout.write(
+        _write_stdout_utf8(
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         )
         return
@@ -703,7 +860,7 @@ def diff(
         }
         if merge_payload is not None:
             payload["merge"] = merge_payload
-        sys.stdout.write(
+        _write_stdout_utf8(
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         )
         return
@@ -799,7 +956,7 @@ def validate(
     if json_output:
         import json
 
-        sys.stdout.write(
+        _write_stdout_utf8(
             json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False)
             + "\n"
         )
@@ -908,7 +1065,7 @@ def install(
             "files_copied": record.files_copied,
             "dry_run": record.dry_run,
         }
-        sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        _write_stdout_utf8(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
         return
 
     if record.dry_run:
@@ -1000,7 +1157,7 @@ def uninstall(
             "files_copied": record.files_copied,
             "dry_run": record.dry_run,
         }
-        sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        _write_stdout_utf8(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
         return
 
     if record.dry_run:

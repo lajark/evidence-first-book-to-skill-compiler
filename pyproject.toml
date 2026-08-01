@@ -91,6 +91,7 @@ known-first-party = ["book2skill"]
 "src/book2skill/extractors/_vendor/**/*.py" = ["E501", "B904", "I001", "F401"]
 # Typer's API requires calling Argument/Option in parameter defaults.
 "src/book2skill/cli.py" = ["B008"]
+"src/book2skill/extensions/cli.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -115,6 +116,7 @@ module = [
     "docx",
     "bs4.*",
     "jsonschema",
+    "openai",
 ]
 ignore_missing_imports = true
 
