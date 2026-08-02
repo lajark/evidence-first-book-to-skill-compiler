@@ -63,6 +63,21 @@ class TestReleasePackage:
             ):
                 assert required in names, f"missing {required}"
 
+    def test_installer_script_is_safe(self, repo_root: Path, tmp_path: Path) -> None:
+        """install.py must be syntactically valid and shell-injection-free.
+
+        os.system routes pip through cmd.exe, which mangles quoted Windows
+        executable paths and reports a spurious syntax error. The installer
+        must use subprocess.run with an argv list instead.
+        """
+        zip_path, _ = _release(repo_root, tmp_path)
+        with zipfile.ZipFile(zip_path) as zf:
+            src = zf.read("install.py").decode("utf-8")
+        compile(src, "install.py", "exec")  # raises SyntaxError if invalid
+        # Guard the os.system -> subprocess.run fix (call form, not comments).
+        assert "os.system(" not in src, "install.py must not call os.system"
+        assert "subprocess.run(" in src, "install.py must install via subprocess.run"
+
     def test_manifest_schema_conformant(self, repo_root: Path, tmp_path: Path) -> None:
         zip_path, _ = _release(repo_root, tmp_path)
         with zipfile.ZipFile(zip_path) as zf:

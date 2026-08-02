@@ -290,13 +290,15 @@ after you have reviewed the manifest and checksums**.
 
 _INSTALL_SCRIPT_TEMPLATE = '''"""Book2Skill Core installer (FR-12).
 
-Creates a dedicated virtualenv, installs the bundled Wheel, initialises the
-extension registry, installs the meta-Skill and runs ``book2skill doctor``.
+Creates a dedicated virtualenv under ``$BOOK2SKILL_HOME/venv`` (default
+``~/.book2skill/venv``) and installs the bundled Wheel into it. Set
+``BOOK2SKILL_HOME`` to deploy somewhere other than the user home.
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import venv
 from pathlib import Path
@@ -321,9 +323,16 @@ def main() -> int:
         venv.EnvBuilder(with_pip=True).create(env_dir)
     python = env_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     print(f"Installing {wheel.name}")
-    code = os.system(f'"{python}" -m pip install "{wheel}"')
-    if code != 0:
-        return code
+    # Use subprocess (not os.system) so quoted Windows paths reach pip intact;
+    # cmd.exe mangles the quoted executable path and reports a syntax error.
+    try:
+        subprocess.run(
+            [str(python), "-m", "pip", "install", str(wheel)],
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"pip install failed (exit {exc.returncode})", file=sys.stderr)
+        return exc.returncode
     print(f"Ready. Activate via: {env_dir}")
     print("Run: book2skill doctor  |  book2skill extensions list")
     return 0
