@@ -52,6 +52,31 @@ def test_analyze_json_failure_keeps_stdout_parseable(tmp_path) -> None:
     assert "ERROR" not in result.stdout
 
 
+def test_analyze_llm_failure_emits_json_error(monkeypatch, tmp_path) -> None:
+    """A runtime LLM failure must surface as JSON, not an empty stdout."""
+    source = tmp_path / "book.txt"
+    source.write_text("Content enough for the pipeline.", encoding="utf-8")
+
+    from book2skill.application.analyze import AnalyzeUseCase
+    from book2skill.llm.runtime import LLMRuntimeError
+
+    def _raise(self: AnalyzeUseCase, *args: object, **kwargs: object) -> None:
+        raise LLMRuntimeError("OpenAI-compatible request failed") from RuntimeError(
+            "401 invalid_api_key"
+        )
+
+    monkeypatch.setattr(AnalyzeUseCase, "execute", _raise)
+    result = runner.invoke(app, ["analyze", str(source), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "LLM_FAILURE"
+    assert "invalid_api_key" in payload["error"]["message"]
+    assert payload["error"]["recovery"]
+    # Human diagnostic routed to stderr so stdout stays a clean JSON document.
+    assert "ERROR" in result.stderr
+
+
 def test_build_json_failure_keeps_stdout_parseable(tmp_path) -> None:
     missing = tmp_path / "missing.txt"
 

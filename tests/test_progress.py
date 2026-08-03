@@ -94,7 +94,9 @@ class TestAnalyzeProgress:
             assert len(totals) == 1, "total must be stable within a stage"
             currents = [c[1] for c in stage_calls]
             assert currents == sorted(currents), "current must be monotonic"
-            assert currents[0] == 1 and currents[-1] == totals.pop()
+            # A leading ``0/total`` "stage started" ping is emitted before the
+            # slow LLM bulk call; per-item completion pings then run 1..total.
+            assert currents[0] in (0, 1) and currents[-1] == totals.pop()
 
     def test_skills_detail_carries_source_id(self, tmp_path: Path) -> None:
         f = _write_txt(
@@ -109,7 +111,11 @@ class TestAnalyzeProgress:
 
         skills_calls = [c for c in calls if c[0] == STAGE_SKILLS]
         assert skills_calls
-        assert all(c[3] == source_id for c in skills_calls)
+        # The leading ``0/total`` ping carries no source id; the per-source
+        # completion pings (current > 0) carry the source id being processed.
+        per_source = [c for c in skills_calls if c[1] > 0]
+        assert per_source
+        assert all(c[3] == source_id for c in per_source)
 
     def test_no_callback_runs_silently(self, tmp_path: Path) -> None:
         """Omitting on_progress must not raise (default noop)."""

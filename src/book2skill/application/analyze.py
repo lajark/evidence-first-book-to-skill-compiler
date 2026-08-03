@@ -181,7 +181,6 @@ class AnalyzeUseCase:
         total_files = len(files)
 
         for i, f in enumerate(files, start=1):
-            reporter(STAGE_EXTRACT, i, total_files, Path(f.path).name)
             extractor = self._registry.get(f.format)
             if extractor is None:
                 errors.append(
@@ -213,6 +212,11 @@ class AnalyzeUseCase:
                     )
                 )
                 continue
+
+            # Report extraction completion *after* the work, so the bar's
+            # ``completed`` reflects what actually finished rather than
+            # jumping to 100% before the (slow) extraction runs.
+            reporter(STAGE_EXTRACT, i, total_files, Path(f.path).name)
 
             if persist_raw:
                 self._persist(extracted.manifest, f, extracted.entries)
@@ -261,11 +265,13 @@ class AnalyzeUseCase:
         candidates: list[CandidateUnit] = []
         review_queue: list[ReviewItem] = []
         total_blocks = len(all_blocks)
+        if total_blocks:
+            reporter(STAGE_STRUCTURE, 0, total_blocks, "")
+            reporter(STAGE_CANDIDATES, 0, total_blocks, "")
 
         for idx, (block, source_id, block_id, _extractor_id) in enumerate(
             all_blocks, start=1
         ):
-            reporter(STAGE_STRUCTURE, idx, total_blocks, source_id)
             struct_entries = self._llm.analyze_structure(source_id, [block])
             for s in struct_entries:
                 # Tolerate residual schema deviations the adapter could not
@@ -278,8 +284,8 @@ class AnalyzeUseCase:
                     structure.append(StructureEntry.model_validate(trusted_structure))
                 except ValidationError:
                     continue
+            reporter(STAGE_STRUCTURE, idx, total_blocks, source_id)
 
-            reporter(STAGE_CANDIDATES, idx, total_blocks, source_id)
             cands = self._llm.extract_candidates(source_id, [block])
             for candidate_idx, c in enumerate(cands, start=1):
                 try:
@@ -296,14 +302,16 @@ class AnalyzeUseCase:
                     continue
                 candidates.append(candidate)
                 self._maybe_flag(candidate, review_queue)
+            reporter(STAGE_CANDIDATES, idx, total_blocks, source_id)
 
         conflicts = self._detect_conflicts(candidates)
 
         suggested: list[SuggestedSkill] = []
         if candidates:
             total_sources = len(source_ids)
+            if total_sources:
+                reporter(STAGE_SKILLS, 0, total_sources, "")
             for idx, source_id in enumerate(source_ids, start=1):
-                reporter(STAGE_SKILLS, idx, total_sources, source_id)
                 source_cands = [
                     c.model_dump(mode="json")
                     for c in candidates
@@ -316,6 +324,7 @@ class AnalyzeUseCase:
                         suggested.append(SuggestedSkill.model_validate(suggestion))
                     except ValidationError:
                         continue
+                reporter(STAGE_SKILLS, idx, total_sources, source_id)
 
         return AnalysisBundle(
             collection_id=coll_id,
@@ -361,6 +370,11 @@ class AnalyzeUseCase:
         review_queue: list[ReviewItem] = []
         candidate_indices: dict[str, int] = {}
         total_chunks = len(chunks)
+        # Mark the structure stage as started *before* the (potentially slow)
+        # bulk LLM call so the progress bar leaves the extraction stage's 100%
+        # and shows "0 of N" instead of freezing on the previous stage.
+        if total_chunks:
+            on_progress(STAGE_STRUCTURE, 0, total_chunks, "")
         # The capability is only provided by built-in LLM adapters. Keeping the
         # legacy two-method protocol below preserves narrow test/future adapters.
         chunk_call = analyze_chunk
@@ -453,6 +467,11 @@ class AnalyzeUseCase:
         reporter: ProgressReporter,
     ) -> list[SuggestedSkill]:
         suggested: list[SuggestedSkill] = []
+        total_sources = len(source_ids)
+        # Announce the skills stage before the first (slow) LLM call so the
+        # bar does not sit on the candidates stage's 100% while waiting.
+        if total_sources:
+            reporter(STAGE_SKILLS, 0, total_sources, "")
         for index, source_id in enumerate(source_ids, start=1):
             source_cands = [
                 candidate.model_dump(mode="json")
@@ -464,12 +483,13 @@ class AnalyzeUseCase:
             ]
             if not source_cands:
                 continue
-            reporter(STAGE_SKILLS, index, len(source_ids), source_id)
             for suggestion in self._llm.suggest_skills(source_id, source_cands):
                 try:
                     suggested.append(SuggestedSkill.model_validate(suggestion))
                 except ValidationError:
                     continue
+            # Report completion *after* the LLM call for this source.
+            reporter(STAGE_SKILLS, index, total_sources, source_id)
         return suggested
 
     @staticmethod

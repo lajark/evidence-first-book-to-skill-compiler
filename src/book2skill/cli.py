@@ -95,6 +95,38 @@ def _write_json_error(
     _write_json({"error": error})
 
 
+def _emit_fatal_error(exc: BaseException, *, json_output: bool) -> None:
+    """Emit a fatal pipeline error as structured JSON or human text.
+
+    When ``--json`` is set, an uncaught ``LLMRuntimeError`` or ``DomainError``
+    from the run must still produce a parseable JSON document on stdout
+    (mirroring ``build``/``update``), instead of leaking a traceback to stderr
+    and leaving consumers with an empty stdout file.
+    """
+    code_attr = getattr(exc, "code", None)
+    code = (
+        code_attr.value
+        if code_attr is not None and hasattr(code_attr, "value")
+        else "LLM_FAILURE"
+    )
+    message = getattr(exc, "message", None) or str(exc)
+    cause = exc.__cause__
+    if cause is not None:
+        message = f"{message}: {cause}"
+    recovery = getattr(exc, "recovery", "") or ""
+    if code == "LLM_FAILURE" and not recovery:
+        recovery = (
+            "Check BOOK2SKILL_LLM / LLM_API_KEY / LLM_MODEL / LLM_BASE_URL "
+            "and retry, or pass --allow-llm-fallback to use the offline Mock."
+        )
+    diagnostic = f"[red]ERROR[/red] {code}: {message}"
+    if recovery:
+        diagnostic += f" (recovery: {recovery})"
+    _print_diagnostic(diagnostic, json_output=json_output)
+    if json_output:
+        _write_json_error(code=code, message=message, recovery=recovery)
+
+
 def _print_diagnostic(message: str, *, json_output: bool) -> None:
     """Route human diagnostics away from a JSON command's stdout channel."""
     ( _stderr_console if json_output else console).print(message)
@@ -274,6 +306,8 @@ def analyze(
 ) -> None:
     """Analyze sources without generating a final Skill (FR-03-1)."""
     from book2skill.application.analyze import AnalyzeUseCase
+    from book2skill.domain.errors import DomainError
+    from book2skill.llm.runtime import LLMRuntimeError
 
     adapter = _build_llm_adapter(
         llm,
@@ -282,13 +316,17 @@ def analyze(
         allow_fallback=allow_llm_fallback,
     )
     use_case = AnalyzeUseCase(data_home=data_home, llm=adapter)
-    with _ProgressCtx("Analyzing...") as on_progress:
-        result = use_case.execute(
-            [str(s) for s in sources],
-            collection_id=collection_id,
-            rights_note=rights_note,
-            on_progress=on_progress,
-        )
+    try:
+        with _ProgressCtx("Analyzing...") as on_progress:
+            result = use_case.execute(
+                [str(s) for s in sources],
+                collection_id=collection_id,
+                rights_note=rights_note,
+                on_progress=on_progress,
+            )
+    except (LLMRuntimeError, DomainError) as exc:
+        _emit_fatal_error(exc, json_output=json_output)
+        raise typer.Exit(code=1) from exc
 
     if result.errors:
         for err in result.errors:
@@ -394,6 +432,8 @@ def batch(
     """Batch-analyze sources with per-file failure isolation (FR-02)."""
     from book2skill.application.analyze import AnalyzeUseCase
     from book2skill.application.batch import BatchOrchestrator
+    from book2skill.domain.errors import DomainError
+    from book2skill.llm.runtime import LLMRuntimeError
 
     adapter = _build_llm_adapter(
         llm,
@@ -410,13 +450,17 @@ def batch(
                 f"[dim]({index}/{total})[/dim] Processing {Path(path).name} ..."
             )
 
-    result = orchestrator.execute(
-        [str(s) for s in sources],
-        rights_note=rights_note,
-        on_progress=_on_progress,
-        checkpoint_path=checkpoint,
-        resume=resume,
-    )
+    try:
+        result = orchestrator.execute(
+            [str(s) for s in sources],
+            rights_note=rights_note,
+            on_progress=_on_progress,
+            checkpoint_path=checkpoint,
+            resume=resume,
+        )
+    except (LLMRuntimeError, DomainError) as exc:
+        _emit_fatal_error(exc, json_output=json_output)
+        raise typer.Exit(code=1) from exc
 
     if json_output:
         import json

@@ -278,6 +278,50 @@ class TestBatchOrchestrator:
         assert result.summary.succeeded == 2
         assert result.summary.skipped == 1
 
+    def test_batch_llm_failure_isolated_per_file(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """An LLM runtime failure on one file must not abort the batch."""
+        from book2skill.llm.runtime import LLMRuntimeError
+
+        good1 = _write_txt(tmp_path / "a.txt", "# A\nPrinciple one enough here.")
+        bad = _write_txt(tmp_path / "b.txt", "# B\nTechnique two enough here.")
+        good2 = _write_txt(tmp_path / "c.txt", "# C\nTerm three enough here.")
+
+        use_case = AnalyzeUseCase()
+        real = use_case.execute_discovered
+
+        def _flaky(
+            discovered,
+            *,
+            gate_errors=None,
+            collection_id=None,
+            rights_note=None,
+            on_progress=None,
+            persist_raw=True,
+        ):
+            if any(str(d.path) == str(bad) for d in discovered):
+                raise LLMRuntimeError("OpenAI-compatible request failed")
+            return real(
+                discovered,
+                gate_errors=gate_errors,
+                collection_id=collection_id,
+                rights_note=rights_note,
+                on_progress=on_progress,
+                persist_raw=persist_raw,
+            )
+
+        use_case.execute_discovered = _flaky  # type: ignore[assignment]
+        orchestrator = BatchOrchestrator(use_case=use_case)
+        result = orchestrator.execute([str(good1), str(bad), str(good2)])
+
+        assert result.summary.total == 3
+        assert result.summary.succeeded == 2
+        assert result.summary.failed == 1
+        assert result.failure_list
+        assert result.failure_list[0].code == "LLM_FAILURE"
+        assert "OpenAI-compatible request failed" in result.failure_list[0].message
+
 
 class TestCheckpointResume:
     """Checkpoint / resume behaviour (PRD P1 断点恢复)."""

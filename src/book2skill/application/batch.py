@@ -42,7 +42,8 @@ from book2skill.application.models import (
     FileOutcome,
     FileStatus,
 )
-from book2skill.llm.runtime import LLMRuntimeConfig
+from book2skill.domain import DomainError
+from book2skill.llm.runtime import LLMRuntimeConfig, LLMRuntimeError
 from book2skill.storage.file_storage import atomic_write
 
 #: Progress callback signature: ``(index, total, path)`` where *index* is the
@@ -284,10 +285,22 @@ class BatchOrchestrator:
         self, discovered: DiscoveredFile, rights_note: str | None
     ) -> FileOutcome:
         """Analyse a single discovered file and build its :class:`FileOutcome`."""
-        result = self._use_case.execute_discovered(
-            [discovered],
-            rights_note=rights_note,
-        )
+        try:
+            result = self._use_case.execute_discovered(
+                [discovered],
+                rights_note=rights_note,
+            )
+        except (LLMRuntimeError, DomainError) as exc:
+            # Per-file failure isolation: a runtime/model failure on one
+            # file must not abort the whole batch. Surface it as a failed
+            # outcome with a serialisable error record instead.
+            return FileOutcome(
+                path=str(discovered.path),
+                source_id=discovered.source_id,
+                status="failed",
+                format=discovered.format.value,
+                errors=[_failure_from_exc(exc, discovered.path)],
+            )
 
         bundle = result.bundle
         if bundle is not None and not result.errors:
@@ -308,6 +321,35 @@ class BatchOrchestrator:
             bundle=bundle,
             errors=[FailureRecord.from_gate_error(e) for e in result.errors],
         )
+
+
+def _failure_from_exc(exc: BaseException, path: Path) -> FailureRecord:
+    """Build a :class:`FailureRecord` from an LLM/domain runtime error.
+
+    ``DomainError`` carries a stable ``code``/``message``/``recovery`` triple;
+    ``LLMRuntimeError`` is a plain ``RuntimeError`` and is normalised to the
+    ``LLM_FAILURE`` code, with the underlying cause folded into the message so
+    the batch failure list stays actionable without a raw traceback.
+    """
+    code_attr = getattr(exc, "code", None)
+    code = (
+        code_attr.value
+        if code_attr is not None and hasattr(code_attr, "value")
+        else "LLM_FAILURE"
+    )
+    message = getattr(exc, "message", None) or str(exc)
+    cause = exc.__cause__
+    if cause is not None:
+        message = f"{message}: {cause}"
+    recovery = getattr(exc, "recovery", "") or ""
+    if code == "LLM_FAILURE" and not recovery:
+        recovery = "Check LLM config / retry, or pass --allow-llm-fallback."
+    return FailureRecord(
+        path=str(path),
+        code=code,
+        message=message,
+        recovery=recovery,
+    )
 
 
 def _tally(outcomes: list[FileOutcome]) -> BatchSummary:
