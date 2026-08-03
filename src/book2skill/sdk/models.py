@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # --- Stable Core model re-exports -------------------------------------------
 # These are declared in Core modules but exported here so extensions depend on
@@ -32,6 +32,7 @@ from book2skill.domain import (
     ExtractionMapEntry,
     KnowledgeCluster,
     KnowledgeRef,
+    KnowledgeStatus,
     KnowledgeUnit,
     Locator,
     LocatorKind,
@@ -53,6 +54,7 @@ __all__ = [
     "ExtractionMapEntry",
     "KnowledgeCluster",
     "KnowledgeRef",
+    "KnowledgeStatus",
     "KnowledgeUnit",
     "Locator",
     "LocatorKind",
@@ -87,7 +89,9 @@ __all__ = [
 class ExtensionDependency(BaseModel):
     """A dependency an extension declares on another extension."""
 
-    extension_id: str
+    model_config = ConfigDict(extra="forbid")
+
+    extension_id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     version: str
 
 
@@ -98,7 +102,9 @@ class ExtensionManifest(BaseModel):
     file at their package root; Core validates and installs them.
     """
 
-    schema_version: int = Field(default=1)
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
     extension_id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     version: str = Field(pattern=r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
     requires: dict[str, Any] = Field(
@@ -108,7 +114,22 @@ class ExtensionManifest(BaseModel):
     contributes: dict[str, Any] = Field(default_factory=dict)
     permissions: list[str] = Field(default_factory=list)
     migrations: list[dict[str, Any]] = Field(default_factory=list)
-    checksums_file: str = Field(default="checksums.sha256")
+    checksums_file: Literal["checksums.sha256"] = "checksums.sha256"
+
+    @field_validator("requires")
+    @classmethod
+    def _validate_requires(cls, value: dict[str, Any]) -> dict[str, Any]:
+        expected = {"book2skill", "extensions"}
+        if set(value) != expected:
+            raise ValueError("requires must contain only book2skill and extensions")
+        if not isinstance(value["book2skill"], str):
+            raise ValueError("requires.book2skill must be a string")
+        extensions = value["extensions"]
+        if not isinstance(extensions, list):
+            raise ValueError("requires.extensions must be a list")
+        for dependency in extensions:
+            ExtensionDependency.model_validate(dependency)
+        return value
 
     def book2skill_range(self) -> str:
         """Return the declared Core compatibility range (``requires.book2skill``)."""

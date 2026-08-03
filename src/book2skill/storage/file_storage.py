@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -30,8 +32,9 @@ def resolve_within(base: Path, *parts: str) -> Path:
     Raises:
         StoragePathError: If the resolved path escapes base.
     """
-    target = (base / Path(*parts)).resolve()
-    if not str(target).startswith(str(base.resolve())):
+    base_resolved = base.resolve()
+    target = (base_resolved / Path(*parts)).resolve()
+    if not target.is_relative_to(base_resolved):
         raise StoragePathError(target)
     return target
 
@@ -63,6 +66,38 @@ def atomic_write(path: Path, content: str | bytes) -> None:
         raise
 
 
+def _stream_copy_atomic(source_path: Path, target: Path) -> None:
+    """Copy *source_path* to *target* using a same-directory atomic replace."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file: Path | None = None
+    try:
+        with source_path.open("rb") as source, tempfile.NamedTemporaryFile(
+            mode="wb", dir=target.parent, delete=False
+        ) as tmp:
+            shutil.copyfileobj(source, tmp, length=1 << 20)
+            tmp.flush()
+            tmp_file = Path(tmp.name)
+        os.replace(tmp_file, target)
+    except Exception:
+        if tmp_file and tmp_file.exists():
+            with contextlib.suppress(OSError):
+                tmp_file.unlink()
+        raise
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _render_extraction_map(entries: Iterable[ExtractionMapEntry]) -> str:
+    lines = [entry.model_dump_json() for entry in entries]
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 class FileRawStorage:
     """File-system implementation of the RawStorage port."""
 
@@ -87,6 +122,114 @@ class FileRawStorage:
         target = original_dir / Path(original_name).name
         atomic_write(target, data)
         return target
+
+    def save_original_from_path(
+        self,
+        source_id: str,
+        version: int,
+        source_path: Path,
+        original_name: str,
+    ) -> Path:
+        """Stream an original into Raw storage without materializing all bytes."""
+        vdir = self._ensure_version_dir(source_id, version)
+        original_dir = vdir / "original"
+        original_dir.mkdir(exist_ok=True)
+        target = original_dir / Path(original_name).name
+        _stream_copy_atomic(source_path, target)
+        return target
+
+    def save_ingest_from_path(
+        self,
+        manifest: SourceManifest,
+        source_path: Path,
+        entries: Iterable[ExtractionMapEntry],
+    ) -> Path:
+        """Atomically create a complete Raw version from a source path.
+
+        New versions are assembled in a same-parent staging directory and
+        become visible with one rename. A matching incomplete version left by
+        an interrupted older run is repaired without overwriting existing Raw
+        files; conflicting content is rejected.
+        """
+        entry_list = list(entries)
+        vdir = self._version_dir(manifest.source_id, manifest.version)
+        if self.exists(manifest.source_id, manifest.version):
+            return vdir
+        if vdir.exists():
+            self._repair_incomplete_ingest(manifest, source_path, entry_list)
+            return vdir
+
+        vdir.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{manifest.version}-", dir=vdir.parent)
+        )
+        try:
+            original = staging / "original" / Path(
+                manifest.original_name or source_path.name
+            ).name
+            _stream_copy_atomic(source_path, original)
+            atomic_write(
+                staging / "manifest.json", manifest.model_dump_json(indent=2)
+            )
+            atomic_write(
+                staging / "extraction-map.jsonl",
+                _render_extraction_map(entry_list),
+            )
+            os.replace(staging, vdir)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return vdir
+
+    def _repair_incomplete_ingest(
+        self,
+        manifest: SourceManifest,
+        source_path: Path,
+        entries: list[ExtractionMapEntry],
+    ) -> None:
+        """Complete a matching interrupted version without replacing Raw data."""
+        vdir = self._version_dir(manifest.source_id, manifest.version)
+        manifest_path = vdir / "manifest.json"
+        stored_manifest: SourceManifest | None = None
+        if manifest_path.exists():
+            stored_manifest = self.load_manifest(manifest.source_id, manifest.version)
+            if (
+                stored_manifest.content_sha256 != manifest.content_sha256
+                or stored_manifest.format != manifest.format
+            ):
+                raise ValueError(
+                    "incomplete Raw version conflicts with source manifest"
+                )
+
+        original_name = (
+            stored_manifest.original_name
+            if stored_manifest and stored_manifest.original_name
+            else manifest.original_name or source_path.name
+        )
+        original_path = vdir / "original" / Path(original_name).name
+        if original_path.exists():
+            if _sha256_path(original_path) != manifest.content_sha256:
+                raise ValueError("incomplete Raw version contains conflicting original")
+        else:
+            self.save_original_from_path(
+                manifest.source_id,
+                manifest.version,
+                source_path,
+                original_name,
+            )
+
+        if stored_manifest is None:
+            self.save_manifest(manifest)
+
+        map_path = vdir / "extraction-map.jsonl"
+        if map_path.exists():
+            stored_entries = self.load_extraction_map(
+                manifest.source_id, manifest.version
+            )
+            if stored_entries != entries:
+                raise ValueError("incomplete Raw version contains conflicting map")
+        else:
+            self.save_extraction_map(manifest.source_id, manifest.version, entries)
 
     def load_original(self, source_id: str, version: int) -> bytes:
         manifest = self.load_manifest(source_id, version)
@@ -117,8 +260,7 @@ class FileRawStorage:
     ) -> Path:
         vdir = self._ensure_version_dir(source_id, version)
         path = vdir / "extraction-map.jsonl"
-        lines = [entry.model_dump_json() for entry in entries]
-        atomic_write(path, "\n".join(lines) + "\n" if lines else "")
+        atomic_write(path, _render_extraction_map(entries))
         return path
 
     def load_extraction_map(
@@ -136,7 +278,14 @@ class FileRawStorage:
         return entries
 
     def exists(self, source_id: str, version: int) -> bool:
-        return self._version_dir(source_id, version).exists()
+        vdir = self._version_dir(source_id, version)
+        original_dir = vdir / "original"
+        return (
+            (vdir / "manifest.json").is_file()
+            and (vdir / "extraction-map.jsonl").is_file()
+            and original_dir.is_dir()
+            and any(child.is_file() for child in original_dir.iterdir())
+        )
 
     def list_versions(self, source_id: str) -> list[int]:
         source_dir = self.raw_root / source_id

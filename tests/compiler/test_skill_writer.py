@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 from book2skill.compiler.ir_builder import SkillIR, SkillUsage, WorkflowStep
 from book2skill.compiler.skill_writer import SkillWriter
@@ -64,6 +65,16 @@ class TestWriteDirectory:
         assert "name: test-skill" in content
         assert "description:" in content
 
+    def test_description_with_colon_keeps_frontmatter_valid(
+        self, writer: SkillWriter
+    ) -> None:
+        description = "Route: use the indexed references before drafting output."
+        writer.write(_ir(description=description))
+        content = (writer._output_dir / "SKILL.md").read_text(encoding="utf-8")
+        frontmatter = content.split("---\n", 2)[1]
+        parsed = yaml.safe_load(frontmatter)
+        assert parsed["description"] == description
+
     def test_skill_md_contains_sections(
         self, writer: SkillWriter
     ) -> None:
@@ -73,8 +84,38 @@ class TestWriteDirectory:
         assert "## Do not use when" in content
         assert "## Required inputs" in content
         assert "## Workflow" in content
+        assert "## Conditions" in content
+        assert "## Exceptions and escalation" in content
         assert "## Output contract" in content
+        assert "## Examples" in content
         assert "## Evidence and limitations" in content
+
+    def test_skill_md_renders_domain_contract_and_case_example(
+        self, writer: SkillWriter
+    ) -> None:
+        ir = _ir().model_copy(
+            update={
+                "required_inputs": ["A signed requirements brief."],
+                "outputs": ["A reviewed delivery plan."],
+                "conditions": ["Use only with confirmed scope."],
+                "exceptions": ["Escalate conflicting requirements."],
+                "examples": [
+                    {
+                        "unit_id": "case-1",
+                        "scenario": "A scoped request produced a delivery plan.",
+                    }
+                ],
+            }
+        )
+
+        writer.write(ir)
+        content = (writer._output_dir / "SKILL.md").read_text(encoding="utf-8")
+
+        assert "- A signed requirements brief." in content
+        assert "- A reviewed delivery plan." in content
+        assert "- Use only with confirmed scope." in content
+        assert "- Escalate conflicting requirements." in content
+        assert "- A scoped request produced a delivery plan. (case: case-1)" in content
 
     def test_use_when_populated(self, writer: SkillWriter) -> None:
         writer.write(_ir())
@@ -285,6 +326,16 @@ class TestProvenanceWithManifests:
         assert "content_sha256: " + "b" * 64 in content
         assert "content_sha256: " + "c" * 64 in content
         assert "format: epub" in content
+
+    def test_manifests_are_written_in_source_id_order(self, tmp_path: Path) -> None:
+        writer = SkillWriter(output_dir=tmp_path / "out")
+        source_b = _manifest(source_id="source-b", original_name="b.pdf")
+        source_a = _manifest(source_id="source-a", original_name="a.pdf")
+
+        writer.write(_ir(), source_manifests=[source_b, source_a])
+
+        content = (tmp_path / "out" / "provenance.yml").read_text(encoding="utf-8")
+        assert content.index("source-a") < content.index("source-b")
 
     def test_manifests_take_precedence_over_source_ids(
         self, tmp_path: Path

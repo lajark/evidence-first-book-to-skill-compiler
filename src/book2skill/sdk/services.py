@@ -15,6 +15,7 @@ from book2skill.application.gate import DiscoveredFile, Gate, GateError
 from book2skill.compiler import ir_builder
 from book2skill.compiler.ir_builder import IRBuilder, SkillIR, SkillSpec
 from book2skill.compiler.skill_writer import SkillWriter
+from book2skill.compiler.wiki_generator import WikiGenerator
 from book2skill.domain import (
     ExtractionMapEntry,
     KnowledgeUnit,
@@ -170,6 +171,34 @@ class SkillCompilerService:
         target = Path(output_dir) if output_dir else self._output_dir
         writer = SkillWriter(target, templates_dir=self._templates_dir)
         return writer.write(ir)
+
+    def compile(
+        self,
+        units: list[KnowledgeUnit],
+        spec: SkillSpec,
+        *,
+        output_dir: str | Path | None = None,
+        source_manifests: list[SourceManifest] | None = None,
+    ) -> Path:
+        """Render a complete compiler view from units through derived files.
+
+        Unlike the legacy two-step ``build_ir()`` then ``write()`` API, this
+        route uses the same IRBuilder references and WikiGenerator views as
+        Core Build/Publisher. It intentionally remains a draft compiler API:
+        publication quality gates and transactions belong to the application
+        layer, where collection state is available.
+        """
+        builder = IRBuilder(units, spec)
+        ir = builder.build()
+        self.validate_ir(ir)
+        target = Path(output_dir) if output_dir else self._output_dir
+        writer = SkillWriter(target, templates_dir=self._templates_dir)
+        return writer.write(
+            ir,
+            references=builder.build_references(),
+            source_manifests=source_manifests,
+            wiki_files=WikiGenerator(units, skill_name=spec.name).build(),
+        )
 
 
 class ValidatorRegistryService:

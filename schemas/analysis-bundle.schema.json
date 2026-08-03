@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AnalysisBundle",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "schema_version",
     "collection_id",
@@ -52,6 +53,31 @@
       "type": "array",
       "items": {
         "type": "object"
+      }
+    },
+    "analysis_run": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "provider",
+        "model",
+        "prompt_version",
+        "response_schema_version",
+        "parameters",
+        "fallback_allowed",
+        "invocations"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "provider": {"enum": ["mock", "openai"]},
+        "model": {"type": "string"},
+        "prompt_version": {"type": "string"},
+        "response_schema_version": {"type": "string"},
+        "locale": {"enum": ["zh-CN", "en"], "default": "zh-CN"},
+        "parameters": {"type": "object"},
+        "fallback_allowed": {"type": "boolean"},
+        "invocations": {"type": "array"}
       }
     }
   }

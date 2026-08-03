@@ -2,7 +2,7 @@
 
 The ``openai`` package is not installed in the test environment, so these
 tests mock the client to verify prompt construction, response parsing, and
-graceful fallback to the MockLLMAdapter.
+typed failure handling for the runtime policy layer.
 """
 
 from __future__ import annotations
@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from book2skill.domain import Locator, LocatorKind, TextBlock
-from book2skill.llm.mock_adapter import MockLLMAdapter
 from book2skill.llm.openai_adapter import OpenAIAdapter, _parse_json_array
+from book2skill.llm.runtime import LLMResponseError, LLMRuntimeError
 
 
 def _make_blocks() -> list[TextBlock]:
@@ -28,7 +30,7 @@ def _make_blocks() -> list[TextBlock]:
 
 
 class TestAvailability:
-    """Fallback behaviour when openai is not installed."""
+    """Fail-closed behaviour when a real provider is unavailable."""
 
     def test_adapter_with_api_key(self) -> None:
         """With an api_key, availability depends on whether openai is installed."""
@@ -52,19 +54,10 @@ class TestAvailability:
         assert adapter._client is None  # noqa: SLF001
         assert adapter.is_available is False
 
-    def test_falls_back_to_mock_when_unavailable(self) -> None:
+    def test_unavailable_provider_raises(self) -> None:
         adapter = OpenAIAdapter()
-        blocks = _make_blocks()
-        # Should produce same output as the mock adapter.
-        mock = MockLLMAdapter()
-        assert (
-            adapter.analyze_structure("src1", blocks)
-            == mock.analyze_structure("src1", blocks)
-        )
-        assert (
-            adapter.extract_candidates("src1", blocks)
-            == mock.extract_candidates("src1", blocks)
-        )
+        with pytest.raises(LLMRuntimeError):
+            adapter.analyze_structure("src1", _make_blocks())
 
 
 class TestResponseParsing:
@@ -106,7 +99,8 @@ class TestMockedClient:
         adapter._model = "test-model"
         adapter._api_key = "sk-test"
         adapter._base_url = None
-        adapter._mock = MockLLMAdapter()
+        adapter._temperature = 0.2
+        adapter._request_timeout_seconds = 12.5
 
         # Build a fake client.
         fake_choice = MagicMock()
@@ -139,6 +133,10 @@ class TestMockedClient:
         assert result[0]["heading"] == "SRP"
         # Verify the client was called.
         adapter._client.chat.completions.create.assert_called_once()
+        assert (
+            adapter._client.chat.completions.create.call_args.kwargs["timeout"]
+            == 12.5
+        )
 
     def test_extract_candidates_with_llm(self) -> None:
         llm_response = json.dumps(
@@ -177,13 +175,10 @@ class TestMockedClient:
         assert len(result) == 1
         assert result[0]["name"] == "solid-principles"
 
-    def test_llm_returns_malformed_falls_back_to_mock(self) -> None:
+    def test_llm_returns_malformed_response_error(self) -> None:
         adapter = self._make_adapter_with_mock_client("not valid json")
-        blocks = _make_blocks()
-        mock = MockLLMAdapter()
-        result = adapter.extract_candidates("src1", blocks)
-        # Falls back to mock output.
-        assert result == mock.extract_candidates("src1", blocks)
+        with pytest.raises(LLMResponseError):
+            adapter.extract_candidates("src1", _make_blocks())
 
 
 class TestOutputNormalization:
@@ -197,7 +192,8 @@ class TestOutputNormalization:
         adapter._model = "test-model"
         adapter._api_key = "sk-test"
         adapter._base_url = None
-        adapter._mock = MockLLMAdapter()
+        adapter._temperature = 0.2
+        adapter._request_timeout_seconds = 12.5
         fake_choice = MagicMock()
         fake_choice.message.content = response_text
         fake_resp = MagicMock()
@@ -258,18 +254,16 @@ class TestOutputNormalization:
         # The coerced entry must validate against the strict model.
         CandidateUnit.model_validate(entry)
 
-    def test_llm_exception_falls_back_to_mock(self) -> None:
+    def test_llm_exception_raises_runtime_error(self) -> None:
         adapter = OpenAIAdapter.__new__(OpenAIAdapter)
         adapter._model = "test-model"
         adapter._api_key = "sk-test"
         adapter._base_url = None
-        adapter._mock = MockLLMAdapter()
+        adapter._temperature = 0.2
 
         fake_client = MagicMock()
         fake_client.chat.completions.create.side_effect = RuntimeError("network error")
         adapter._client = fake_client
 
-        blocks = _make_blocks()
-        mock = MockLLMAdapter()
-        result = adapter.analyze_structure("src1", blocks)
-        assert result == mock.analyze_structure("src1", blocks)
+        with pytest.raises(LLMRuntimeError):
+            adapter.analyze_structure("src1", _make_blocks())

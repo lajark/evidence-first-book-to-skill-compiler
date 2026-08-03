@@ -10,6 +10,7 @@ copyrighted content is needed.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -169,10 +170,19 @@ def test_extractor_round_trip_via_synthetic_mobi(
     )
 
     mobi_path = tmp_path / "output.mobi"
+    env = os.environ.copy()
+    env["CALIBRE_CONFIG_DIRECTORY"] = str(tmp_path / "calibre-config")
+    calibre_temp = tmp_path / "calibre-temp"
+    calibre_temp.mkdir()
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        env[variable] = str(calibre_temp)
     result = subprocess.run(
         ["ebook-convert", str(txt_path), str(mobi_path)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
         timeout=120,
     )
     assert result.returncode == 0, f"ebook-convert failed: {result.stderr}"
@@ -200,8 +210,6 @@ def test_extractor_produces_paragraph_entries(
     # This test requires a real MOBI file, which we do not ship to avoid
     # copyright concerns. It is a placeholder that exercises the full path
     # when a fixture is supplied via the B2S_MOBI_FIXTURE environment variable.
-    import os
-
     fixture = os.environ.get("B2S_MOBI_FIXTURE")
     if not fixture or not Path(fixture).exists():
         pytest.skip("set B2S_MOBI_FIXTURE to a real MOBI path to run this test")

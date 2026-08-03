@@ -21,7 +21,6 @@ from pathlib import Path
 from book2skill import __version__
 from book2skill.extensions.package import (
     CHECKSUMS_FILENAME,
-    build_checksums_text,
 )
 
 RELEASE_NAME = "book2skill-core"
@@ -74,8 +73,14 @@ def build_release(
         artifacts = _collect_payload(pkg_root)
         _write_release_manifest(pkg_root, version, artifacts)
         # Recompute manifest-inclusive payload for the final checksums file
-        # (release-manifest.json is itself a delivery file).
-        _write_checksums(pkg_root)
+        # (release-manifest.json is itself a delivery file).  Reuse the
+        # digests collected above rather than materialising every payload a
+        # second time just to make checksums.sha256.
+        known_hashes = {item["path"]: item["sha256"] for item in artifacts}
+        known_hashes["release-manifest.json"] = _sha256_of_file(
+            pkg_root / "release-manifest.json"
+        )
+        _write_checksums(pkg_root, known_hashes=known_hashes)
 
         zip_path = dest / f"{RELEASE_NAME}-{version}.zip"
         _zip_tree(pkg_root, zip_path)
@@ -206,19 +211,20 @@ def _write_release_manifest(
     )
 
 
-def _write_checksums(pkg_root: Path) -> None:
-    """Write checksums.sha256 covering every non-checksums payload file."""
-    files: dict[str, bytes] = {}
-    for p in pkg_root.rglob("*"):
+def _write_checksums(pkg_root: Path, *, known_hashes: dict[str, str]) -> None:
+    """Stream checksum collection, reusing hashes already computed for release."""
+    lines: list[str] = []
+    for p in sorted(pkg_root.rglob("*")):
         if p.is_file():
             rel = p.relative_to(pkg_root).as_posix()
             # Only the top-level checksums file is self-excluded; nested
             # package checksums (e.g. the sample-extension) are payload.
             if rel == CHECKSUMS_FILENAME:
                 continue
-            files[rel] = p.read_bytes()
+            digest = known_hashes.get(rel) or _sha256_of_file(p)
+            lines.append(f"{digest}  {rel}")
     (pkg_root / CHECKSUMS_FILENAME).write_text(
-        build_checksums_text(files), encoding="utf-8"
+        "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
     )
 
 

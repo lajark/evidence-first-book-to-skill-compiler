@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from book2skill.domain import DomainError, ErrorCode, SourceFormat
+from book2skill.extractors._vendor.book_to_skill.docx import validate_docx_xml_safety
 from book2skill.extractors._vendor.book_to_skill.exceptions import ExtractionError
 from book2skill.extractors.base import ExtractorCapabilities
 from book2skill.extractors.docx_extractor import DocxExtractor
@@ -119,6 +120,32 @@ def test_extractor_rejects_dtd_entity_declaration(
 
     with pytest.raises(ExtractionError, match="forbidden DTD"):
         extractor.extract(source_path, source_id="b" * 64)
+
+
+def test_xml_safety_rejects_utf16_dtd_in_one_encoding_pass(tmp_path: Path) -> None:
+    """The safety scan must recognize DTDs without trial-decoding every XML."""
+    source_path = tmp_path / "utf16-evil.docx"
+    payload = "<!DOCTYPE foo [<!ENTITY xxe 'attack'>]>".encode("utf-16le")
+    with zipfile.ZipFile(source_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("word/document.xml", b"\xff\xfe" + payload)
+
+    with pytest.raises(ExtractionError, match="forbidden DTD"):
+        validate_docx_xml_safety(str(source_path))
+
+
+def test_xml_safety_applies_member_decompression_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Oversized XML members are rejected before their bytes are read."""
+    source_path = tmp_path / "oversized.docx"
+    with zipfile.ZipFile(source_path, "w", zipfile.ZIP_STORED) as zf:
+        zf.writestr("word/document.xml", b"x" * 32)
+
+    import book2skill.extractors._vendor.book_to_skill.docx as vendor_docx
+
+    monkeypatch.setattr(vendor_docx, "_MAX_XML_MEMBER_BYTES", 16)
+    with pytest.raises(ExtractionError, match="exceeds the XML safety budget"):
+        validate_docx_xml_safety(str(source_path))
 
 
 def test_extractor_rejects_missing_file(

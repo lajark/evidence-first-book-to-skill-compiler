@@ -207,6 +207,8 @@ class DiffEngine:
         self,
         old: list[KnowledgeUnit],
         new: list[KnowledgeUnit],
+        *,
+        allow_removals: bool = True,
     ) -> DiffResult:
         """Compare two unit collections by ``unit_id``.
 
@@ -214,6 +216,9 @@ class DiffEngine:
         so superseded history does not skew the diff. Units present only in
         ``old`` become ``removed``; only in ``new`` become ``added``; in both
         with field drift become ``modified``; identical become ``unchanged``.
+        When *allow_removals* is ``False``, old-only units are retained as
+        ``unchanged``. This is the safe mode for appending independent source
+        material; callers must opt into replacement semantics explicitly.
         Cross-collection conflicts are detected with
         :func:`~book2skill.domain.detect_conflicts` over the union of both
         current views.
@@ -245,7 +250,10 @@ class DiffEngine:
 
         for uid, old_u in old_by_id.items():
             if uid not in new_by_id:
-                removed.append(old_u)
+                if allow_removals:
+                    removed.append(old_u)
+                else:
+                    unchanged.append(old_u)
 
         # Cross-collection conflict scan over the union of current views.
         union = list(old_by_id.values()) + [
@@ -276,6 +284,8 @@ class DiffEngine:
         base: list[KnowledgeUnit],
         new: list[KnowledgeUnit],
         overrides: list[Override],
+        *,
+        allow_removals: bool = True,
     ) -> MergeResult:
         """Three-way field-level merge (PRD FR-06, ARCHITECTURE §4).
 
@@ -289,8 +299,10 @@ class DiffEngine:
         - If neither changed → keep ``base``.
 
         Units only in ``new`` (added) are passed through unchanged. Units
-        only in ``base`` (removed) are dropped from ``merged``; their
-        overrides move to ``preserved_overrides`` for reviewer action.
+        only in ``base`` are dropped from ``merged`` when *allow_removals* is
+        ``True``; their overrides move to ``preserved_overrides`` for reviewer
+        action. In add-only mode they remain in their original order and active
+        overrides continue to apply.
         """
         base_current = current_view(base)
         new_current = current_view(new)
@@ -309,9 +321,34 @@ class DiffEngine:
         unresolvable: list[UnitChange] = []
         conflict_counter = 0
 
-        for uid, new_u in new_by_id.items():
+        ordered_ids = list(new_by_id)
+        if not allow_removals:
+            ordered_ids = list(base_by_id) + [
+                uid for uid in new_by_id if uid not in base_by_id
+            ]
+
+        for uid in ordered_ids:
             base_u = base_by_id.get(uid)
+            new_u = new_by_id.get(uid)
             unit_overrides = overrides_by_unit.get(uid, [])
+
+            if new_u is None:
+                # Add-only fold-in: absence from the new-source analysis is not
+                # evidence that an existing unit was removed.
+                assert base_u is not None
+                merged_u, unit_applied, unit_conflicts, unit_unresolvable = _merge_unit(
+                    base_u,
+                    base_u,
+                    unit_overrides,
+                    uid,
+                    conflict_counter,
+                )
+                merged.append(merged_u)
+                applied.extend(unit_applied)
+                new_conflicts.extend(unit_conflicts)
+                unresolvable.extend(unit_unresolvable)
+                conflict_counter += len(unit_conflicts)
+                continue
 
             if base_u is None:
                 # Added unit: no base to merge against; adopt new as-is.
@@ -330,11 +367,12 @@ class DiffEngine:
             unresolvable.extend(unit_unresolvable)
             conflict_counter += len(unit_conflicts)
 
-        # Overrides for removed units (in base but not in new) are preserved.
-        for uid in base_by_id:
-            if uid in new_by_id:
-                continue
-            preserved.extend(overrides_by_unit.get(uid, []))
+        if allow_removals:
+            # Overrides for removed units (in base but not in new) are preserved.
+            for uid in base_by_id:
+                if uid in new_by_id:
+                    continue
+                preserved.extend(overrides_by_unit.get(uid, []))
 
         return MergeResult(
             merged=merged,

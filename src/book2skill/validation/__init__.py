@@ -27,12 +27,19 @@ from book2skill.validation.models import (
     QualityReport,
     ReportStatus,
 )
+from book2skill.validation.publication_gate import (
+    REQUIRED_PUBLICATION_CHECK_IDS,
+    PublicationGateResult,
+    evaluate_publication_quality,
+)
 from book2skill.validation.quality_report import QualityReportWriter, Validator
 from book2skill.validation.source_check import SourceCheck
 
 __all__ = [
     "Validator",
     "QualityReportWriter",
+    "PublicationGateResult",
+    "REQUIRED_PUBLICATION_CHECK_IDS",
     "BaseCheck",
     "CheckResult",
     "CheckStatus",
@@ -44,4 +51,5 @@ __all__ = [
     "CopyrightCheck",
     "InjectionCheck",
     "BudgetCheck",
+    "evaluate_publication_quality",
 ]

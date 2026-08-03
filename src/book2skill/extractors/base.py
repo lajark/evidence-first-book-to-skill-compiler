@@ -7,11 +7,19 @@ declaring its capabilities, and reporting optional backend availability.
 
 from __future__ import annotations
 
+import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
-from book2skill.domain import ExtractionMapEntry, SourceManifest, TextBlock
+from book2skill.domain import (
+    ExtractionMapEntry,
+    SourceFormat,
+    SourceManifest,
+    TextBlock,
+    derive_block_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +41,19 @@ class ExtractorCapabilities:
 
     requires_external_tool: bool = False
     """Does the extractor require an external CLI tool (e.g. Calibre)?"""
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionResult:
+    """One-pass extraction output consumed by application use cases."""
+
+    manifest: SourceManifest
+    blocks: tuple[TextBlock, ...]
+    entries: tuple[ExtractionMapEntry, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.blocks) != len(self.entries):
+            raise ValueError("each extracted block must have one map entry")
 
 
 class Extractor(ABC):
@@ -83,6 +104,50 @@ class Extractor(ABC):
         """
         ...
 
+    def extract_result(
+        self,
+        path: Path,
+        *,
+        source_id: str,
+        source_format: SourceFormat,
+        content_sha256: str | None = None,
+        version: int = 1,
+        original_name: str | None = None,
+        rights_note: str | None = None,
+    ) -> ExtractionResult:
+        """Extract blocks, manifest and source map in one adapter pass.
+
+        This additive API preserves the original two-item :meth:`extract`
+        contract for SDK callers. Custom extractors may override it when they
+        need specialized map metadata; the default owns IDs and hashes in
+        Core and calls :meth:`extract_text_blocks` exactly once.
+        """
+        blocks = tuple(self.extract_text_blocks(path))
+        digest = content_sha256 or _sha256_path(path)
+        manifest = SourceManifest(
+            source_id=source_id,
+            version=version,
+            original_name=original_name or path.name,
+            content_sha256=digest,
+            format=source_format,
+            rights_confirmed=True,
+            rights_note=rights_note,
+            extractor=self.name,
+            extractor_version=self.version,
+            ingested_at=datetime.now(timezone.utc),
+        )
+        entries = tuple(
+            ExtractionMapEntry(
+                block_id=derive_block_id(source_id, block.locator, idx),
+                source_id=source_id,
+                text_sha256=hashlib.sha256(block.text.encode("utf-8")).hexdigest(),
+                locator=block.locator,
+                confidence=1.0,
+            )
+            for idx, block in enumerate(blocks, start=1)
+        )
+        return ExtractionResult(manifest=manifest, blocks=blocks, entries=entries)
+
     @property
     @abstractmethod
     def version(self) -> str:
@@ -114,3 +179,14 @@ class Extractor(ABC):
         expose their dependency status (e.g. Calibre, PyMuPDF).
         """
         return {}
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+__all__ = ["ExtractionResult", "Extractor", "ExtractorCapabilities"]

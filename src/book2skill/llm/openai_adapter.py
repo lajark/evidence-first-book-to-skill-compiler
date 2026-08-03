@@ -5,10 +5,10 @@ sends text blocks to an OpenAI-compatible chat endpoint and parses the
 structured JSON response into the same shape
 :class:`~book2skill.llm.mock_adapter.MockLLMAdapter` produces.
 
-The ``openai`` Python package is an **optional** dependency. When it is
-missing, or when no API key is configured, the adapter falls back to the
-:class:`MockLLMAdapter` so the pipeline still runs offline. This mirrors
-the Calibre / Tesseract optional-dependency pattern.
+The ``openai`` Python package is an **optional** dependency. A configured
+real provider fails closed when the dependency, credentials, network, or
+response contract is unavailable. Explicit fallback policy and audit records
+belong to :class:`book2skill.llm.runtime.RuntimeLLMAdapter`.
 
 Design notes
 ------------
@@ -16,8 +16,8 @@ Design notes
 - Each method sends a system prompt describing the expected JSON schema,
   plus the text blocks as user content. The model is asked to return a
   JSON array; the response is parsed with :func:`json.loads`.
-- When the LLM response cannot be parsed, the adapter falls back to the
-  mock adapter for that call (graceful degradation, never crashes).
+- Invalid responses raise a typed runtime error rather than silently changing
+  the analysis provider.
 - The adapter is stateless between calls; no conversation history is kept.
 - API keys come only from the constructor or ``OPENAI_API_KEY`` env var
   (never logged).
@@ -30,7 +30,12 @@ import os
 from typing import Any
 
 from book2skill.domain import TextBlock
-from book2skill.llm.mock_adapter import MockLLMAdapter
+from book2skill.llm.chunking import ChunkItem
+from book2skill.llm.runtime import (
+    LLMResponseError,
+    LLMRuntimeError,
+    LLMUnavailableError,
+)
 
 
 class OpenAIAdapter:
@@ -41,8 +46,7 @@ class OpenAIAdapter:
         api_key: API key. Falls back to ``OPENAI_API_KEY`` env var.
         base_url: Optional base URL for OpenAI-compatible endpoints
             (e.g. ``"http://localhost:11434/v1"`` for Ollama).
-        mock: Fallback adapter used when the LLM is unavailable or returns
-            unparseable output. Defaults to a fresh :class:`MockLLMAdapter`.
+        temperature: Sampling temperature recorded by the runtime manifest.
     """
 
     def __init__(
@@ -51,21 +55,21 @@ class OpenAIAdapter:
         model: str = "gpt-4o",
         api_key: str | None = None,
         base_url: str | None = None,
-        mock: MockLLMAdapter | None = None,
+        temperature: float = 0.2,
+        request_timeout_seconds: float = 30.0,
     ) -> None:
         self._model = model
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self._base_url = base_url
-        self._mock = mock or MockLLMAdapter()
+        self._temperature = temperature
+        self._request_timeout_seconds = request_timeout_seconds
         self._client = self._build_client()
 
     def _build_client(self) -> Any:
         """Create the OpenAI client, or ``None`` if unavailable.
 
-        Returns ``None`` when the ``openai`` package is missing OR when no
-        API key is configured (the OpenAI client constructor raises
-        ``OpenAIError`` on missing credentials). In both cases the adapter
-        falls back to the mock adapter.
+        Returns ``None`` when the optional client cannot be initialized. The
+        public operations then raise :class:`LLMUnavailableError`.
         """
         if not self._api_key:
             return None
@@ -93,58 +97,75 @@ class OpenAIAdapter:
         source_id: str,
         blocks: list[TextBlock],
     ) -> list[dict[str, object]]:
-        """Detect document structure via LLM, falling back to mock."""
-        if not self.is_available:
-            return self._mock.analyze_structure(source_id, blocks)
+        """Detect document structure via the configured real provider."""
+        self._require_available()
 
         prompt = _build_structure_prompt(source_id, blocks)
         raw = self._chat(prompt)
-        if raw is None:
-            return self._mock.analyze_structure(source_id, blocks)
-        parsed = _parse_json_array(raw)
+        parsed = _parse_required_json_array(raw)
         normalized = [_normalize_structure(e) for e in parsed]
-        return normalized or self._mock.analyze_structure(source_id, blocks)
+        return normalized
+
+    def analyze_chunk(
+        self, source_id: str, items: list[ChunkItem]
+    ) -> dict[str, list[dict[str, object]]]:
+        """Analyze one bounded chunk with a combined response contract."""
+        self._require_available()
+        raw = self._chat(_build_chunk_prompt(source_id, items))
+        payload = _parse_required_json_object(raw)
+        structure = payload.get("structure", [])
+        candidates = payload.get("candidates", [])
+        if not isinstance(structure, list) or not isinstance(candidates, list):
+            raise LLMResponseError("LLM chunk response arrays are invalid")
+        if any(not isinstance(item, dict) for item in structure + candidates):
+            raise LLMResponseError("LLM chunk response items must be objects")
+        return {
+            "structure": [_normalize_structure(dict(item)) for item in structure],
+            "candidates": [_normalize_candidate(dict(item)) for item in candidates],
+        }
 
     def extract_candidates(
         self,
         source_id: str,
         blocks: list[TextBlock],
     ) -> list[dict[str, object]]:
-        """Extract candidate knowledge units via LLM, falling back to mock."""
-        if not self.is_available:
-            return self._mock.extract_candidates(source_id, blocks)
+        """Extract candidate knowledge units via the configured provider."""
+        self._require_available()
 
         prompt = _build_candidates_prompt(source_id, blocks)
         raw = self._chat(prompt)
-        if raw is None:
-            return self._mock.extract_candidates(source_id, blocks)
-        parsed = _parse_json_array(raw)
+        parsed = _parse_required_json_array(raw)
         normalized = [_normalize_candidate(e) for e in parsed]
-        return normalized or self._mock.extract_candidates(source_id, blocks)
+        return normalized
 
     def suggest_skills(
         self,
         source_id: str,
         candidates: list[dict[str, object]],
     ) -> list[dict[str, object]]:
-        """Propose skill shapes via LLM, falling back to mock."""
-        if not self.is_available:
-            return self._mock.suggest_skills(source_id, candidates)
+        """Propose skill shapes via the configured real provider."""
+        self._require_available()
 
         prompt = _build_skills_prompt(source_id, candidates)
         raw = self._chat(prompt)
-        if raw is None:
-            return self._mock.suggest_skills(source_id, candidates)
-        parsed = _parse_json_array(raw)
+        parsed = _parse_required_json_array(raw)
         normalized = [_normalize_skill(e) for e in parsed]
-        return normalized or self._mock.suggest_skills(source_id, candidates)
+        return normalized
 
     # -- internals --------------------------------------------------------
 
-    def _chat(self, prompt: str) -> str | None:
-        """Send a chat completion request, returning the text or ``None``."""
+    def _require_available(self) -> None:
+        if not self.is_available:
+            raise LLMUnavailableError(
+                "The configured OpenAI-compatible provider is unavailable."
+            )
+
+    def _chat(self, prompt: str) -> str:
+        """Send a chat completion request, raising on a failed request."""
         if self._client is None:
-            return None
+            raise LLMUnavailableError(
+                "The configured OpenAI-compatible provider is unavailable."
+            )
         try:
             resp = self._client.chat.completions.create(
                 model=self._model,
@@ -158,11 +179,12 @@ class OpenAIAdapter:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
+                temperature=self._temperature,
+                timeout=getattr(self, "_request_timeout_seconds", 30.0),
             )
             return resp.choices[0].message.content or ""
-        except Exception:
-            return None
+        except Exception as exc:
+            raise LLMRuntimeError("OpenAI-compatible request failed") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +239,28 @@ def _build_candidates_prompt(
     )
 
 
+def _build_chunk_prompt(source_id: str, items: list[ChunkItem]) -> str:
+    """Build one bounded structure-and-candidate request with neighbour context."""
+    records = []
+    for item in items:
+        records.append(
+            {
+                "input_id": item.input_id,
+                "locator": item.locator.model_dump(mode="json"),
+                "context_before": item.context_before,
+                "text": item.text,
+                "context_after": item.context_after,
+            }
+        )
+    return (
+        f"Analyse bounded source chunk from '{source_id}'. Return ONLY one JSON "
+        "object with arrays 'structure' and 'candidates'. Every item MUST carry "
+        "input_id copied exactly from the input. Structure items need heading, "
+        "level (1-6), text_preview; candidate items need kind, content, confidence "
+        "(0-1), review_status='candidate'. Context is for interpretation only; do "
+        "not cite it as an item.\n\n"
+        + json.dumps(records, ensure_ascii=False, separators=(",", ":"))
+    )
 def _build_skills_prompt(
     source_id: str, candidates: list[dict[str, object]]
 ) -> str:
@@ -247,6 +291,40 @@ def _parse_json_array(raw: str) -> list[dict[str, object]]:
     if not isinstance(parsed, list):
         return []
     return [item for item in parsed if isinstance(item, dict)]
+
+
+def _parse_required_json_array(raw: str) -> list[dict[str, object]]:
+    """Parse an array response and reject malformed/non-array payloads."""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = "\n".join(
+            line for line in cleaned.split("\n") if not line.strip().startswith("```")
+        )
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise LLMResponseError("LLM response was not valid JSON") from exc
+    if not isinstance(parsed, list):
+        raise LLMResponseError("LLM response must be a JSON array")
+    if any(not isinstance(item, dict) for item in parsed):
+        raise LLMResponseError("LLM response array items must be objects")
+    return [dict(item) for item in parsed]
+
+
+def _parse_required_json_object(raw: str) -> dict[str, object]:
+    """Parse an object response and reject malformed payloads."""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = "\n".join(
+            line for line in cleaned.split("\n") if not line.strip().startswith("```")
+        )
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise LLMResponseError("LLM response was not valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise LLMResponseError("LLM chunk response must be a JSON object")
+    return dict(parsed)
 
 
 # ---------------------------------------------------------------------------

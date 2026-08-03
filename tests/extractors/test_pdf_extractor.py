@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from book2skill.domain import DomainError, ErrorCode, SourceFormat
+from book2skill.domain import DomainError, ErrorCode, LocatorKind, SourceFormat
 from book2skill.extractors.base import ExtractorCapabilities
 from book2skill.extractors.pdf_extractor import PdfExtractor, has_pdf_backend
 
@@ -135,6 +135,26 @@ def test_extractor_produces_page_entries(
     assert len(entries) >= 1
     assert entries[0].locator.kind == "page"
     assert entries[0].locator.page == 1
+
+
+def test_fallback_without_page_boundaries_does_not_invent_page_numbers(
+    tmp_path: Path, extractor: PdfExtractor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "fallback.pdf"
+    source_path.write_bytes(b"%PDF-1.4\nplaceholder")
+    monkeypatch.setattr(
+        PdfExtractor,
+        "_extract_text",
+        staticmethod(lambda _path: "Text extracted without page separators."),
+    )
+
+    manifest, entries = extractor.extract(source_path, source_id="c" * 64)
+
+    assert manifest.format == SourceFormat.PDF
+    assert len(entries) == 1
+    assert entries[0].locator.kind == LocatorKind.UNKNOWN
+    assert entries[0].locator.page is None
+    assert entries[0].block_id.endswith("-b1")
 
 
 def test_extractor_probe_pdf(tmp_path: Path, extractor: PdfExtractor) -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import book2skill.storage.schema_storage as schema_storage_module
 from book2skill.domain import (
     KnowledgeRef,
     KnowledgeStatus,
@@ -74,6 +75,123 @@ class TestSaveLoadUnit:
     ) -> None:
         store.save_unit("col-1", _unit(unit_id="ku-1"))
         assert store.load_unit("col-1", "nope") is None
+
+
+class TestSaveUnitsAtomic:
+    def test_preserves_order_across_single_and_batch_saves(
+        self, store: KnowledgeSchemaStorage
+    ) -> None:
+        store.save_unit("col-1", _unit(unit_id="ku-1"))
+
+        path = store.save_units_atomic(
+            "col-1",
+            [_unit(unit_id="ku-2"), _unit(unit_id="ku-3")],
+        )
+        store.save_unit("col-1", _unit(unit_id="ku-4"))
+
+        assert path.exists()
+        assert [unit.unit_id for unit in store.load_units("col-1")] == [
+            "ku-1",
+            "ku-2",
+            "ku-3",
+            "ku-4",
+        ]
+
+    def test_save_new_units_atomic_skips_existing_history(
+        self, store: KnowledgeSchemaStorage
+    ) -> None:
+        original = _unit(unit_id="ku-1")
+        store.save_unit("col-1", original)
+
+        store.save_new_units_atomic("col-1", [original, _unit(unit_id="ku-2")])
+
+        assert [unit.unit_id for unit in store.load_units("col-1")] == [
+            "ku-1",
+            "ku-2",
+        ]
+
+    def test_builds_complete_jsonl_for_one_atomic_write(
+        self,
+        store: KnowledgeSchemaStorage,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store.save_unit("col-1", _unit(unit_id="ku-1"))
+        calls: list[tuple[Path, str | bytes]] = []
+
+        def capture_atomic_write(path: Path, content: str | bytes) -> None:
+            calls.append((path, content))
+
+        monkeypatch.setattr(
+            schema_storage_module,
+            "atomic_write",
+            capture_atomic_write,
+        )
+
+        store.save_units_atomic(
+            "col-1",
+            [_unit(unit_id="ku-2"), _unit(unit_id="ku-3")],
+        )
+
+        assert len(calls) == 1
+        content = calls[0][1]
+        assert isinstance(content, str)
+        assert [
+            KnowledgeUnit.model_validate_json(line).unit_id
+            for line in content.splitlines()
+        ] == ["ku-1", "ku-2", "ku-3"]
+
+    def test_atomic_write_failure_keeps_existing_file_unchanged(
+        self,
+        store: KnowledgeSchemaStorage,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = store.save_unit("col-1", _unit(unit_id="ku-1"))
+        before = path.read_bytes()
+
+        def fail_atomic_write(_path: Path, _content: str | bytes) -> None:
+            raise OSError("simulated atomic replace failure")
+
+        monkeypatch.setattr(
+            schema_storage_module,
+            "atomic_write",
+            fail_atomic_write,
+        )
+
+        with pytest.raises(OSError, match="simulated atomic replace failure"):
+            store.save_units_atomic(
+                "col-1",
+                [_unit(unit_id="ku-2"), _unit(unit_id="ku-3")],
+            )
+
+        assert path.read_bytes() == before
+        assert [unit.unit_id for unit in store.load_units("col-1")] == ["ku-1"]
+
+    def test_empty_batch_does_not_create_or_touch_file(
+        self,
+        store: KnowledgeSchemaStorage,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        existing_path = store.save_unit("col-1", _unit(unit_id="ku-1"))
+        before = existing_path.read_bytes()
+        expected = tmp_path / "schema" / "empty" / "units.jsonl"
+
+        def fail_if_called(_path: Path, _content: str | bytes) -> None:
+            raise AssertionError("atomic_write must not run for an empty batch")
+
+        monkeypatch.setattr(
+            schema_storage_module,
+            "atomic_write",
+            fail_if_called,
+        )
+
+        assert store.save_units_atomic("col-1", []) == existing_path
+        path = store.save_units_atomic("empty", [])
+
+        assert existing_path.read_bytes() == before
+        assert path == expected
+        assert not path.exists()
+        assert not path.parent.exists()
 
 
 class TestVersioning:

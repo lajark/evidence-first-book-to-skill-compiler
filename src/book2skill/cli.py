@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import types
+from contextvars import ContextVar
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
@@ -19,30 +20,45 @@ from rich.progress import (
 )
 
 from book2skill import __version__
-from book2skill.application.analyze import AnalyzeUseCase
-from book2skill.application.batch import BatchOrchestrator
-from book2skill.application.build import BuildUseCase
-from book2skill.application.diff import DiffEngine, load_diff_input
-from book2skill.application.progress import (
-    STAGE_CANDIDATES,
-    STAGE_COMPILE,
-    STAGE_EXTRACT,
-    STAGE_SKILLS,
-    STAGE_STRUCTURE,
-    ProgressReporter,
-)
-from book2skill.application.update import UpdateUseCase
-from book2skill.compiler import SkillSpec
-from book2skill.config import load_env_file
-from book2skill.domain.errors import DomainError
+from book2skill.application.progress import ProgressReporter
+from book2skill.config import Locale, load_env_file, resolve_locale
 from book2skill.extensions.cli import extensions_app
-from book2skill.hosts import HOST_KINDS, get_installer
-from book2skill.llm.ports import LLMAdapter
-from book2skill.storage.override_storage import OverrideStorage
-from book2skill.storage.schema_storage import KnowledgeSchemaStorage
-from book2skill.validation import QualityReportWriter, Validator
+
+if TYPE_CHECKING:
+    from book2skill.llm.ports import LLMAdapter
 
 app = typer.Typer(name="book2skill", help="Book2Skill CLI")
+_active_locale: ContextVar[Locale] = ContextVar("book2skill_locale", default="zh-CN")
+
+
+def __getattr__(name: str) -> object:
+    """Keep the historic CLI test/integration hook lazy-compatible.
+
+    ``UpdateUseCase`` used to be a module global. Returning it only on
+    explicit attribute access avoids loading the update pipeline for ordinary
+    CLI startup while preserving integrations that instrument the use case.
+    """
+    if name == "UpdateUseCase":
+        from book2skill.application.update import UpdateUseCase
+
+        return UpdateUseCase
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+@app.callback()
+def main(
+    locale: str | None = typer.Option(
+        None,
+        "--locale",
+        help="Human-readable output locale: zh-CN (default) or en.",
+    ),
+) -> None:
+    """Configure process-local CLI presentation settings."""
+    try:
+        resolved = resolve_locale(locale, env_file=load_env_file())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--locale") from exc
+    _active_locale.set(resolved)
 
 
 def _write_stdout_utf8(text: str) -> None:
@@ -60,6 +76,28 @@ def _write_stdout_utf8(text: str) -> None:
         buffer.flush()
     else:
         sys.stdout.write(text)
+
+
+def _write_json(payload: object) -> None:
+    """Emit exactly one JSON document to stdout."""
+    import json
+
+    _write_stdout_utf8(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
+def _write_json_error(
+    *, code: str, message: str, recovery: str | None = None
+) -> None:
+    """Emit a machine-readable error without leaking diagnostics to stdout."""
+    error: dict[str, str] = {"code": code, "message": message}
+    if recovery:
+        error["recovery"] = recovery
+    _write_json({"error": error})
+
+
+def _print_diagnostic(message: str, *, json_output: bool) -> None:
+    """Route human diagnostics away from a JSON command's stdout channel."""
+    ( _stderr_console if json_output else console).print(message)
 app.add_typer(extensions_app)
 console = Console()
 
@@ -67,18 +105,27 @@ console = Console()
 _stderr_console = Console(stderr=True)
 
 #: Map stage codes to localized labels for the progress bar.
-_STAGE_LABELS: dict[str, str] = {
-    STAGE_EXTRACT: "提取文本",
-    STAGE_STRUCTURE: "结构分析 (LLM)",
-    STAGE_CANDIDATES: "候选抽取 (LLM)",
-    STAGE_SKILLS: "Skill 建议 (LLM)",
-    STAGE_COMPILE: "编译 Skill",
+_STAGE_LABELS: dict[Locale, dict[str, str]] = {
+    "zh-CN": {
+        "extract": "提取文本",
+        "structure": "结构分析 (LLM)",
+        "candidates": "候选抽取 (LLM)",
+        "skills": "Skill 建议 (LLM)",
+        "compile": "编译 Skill",
+    },
+    "en": {
+        "extract": "Extracting text",
+        "structure": "Analyzing structure (LLM)",
+        "candidates": "Extracting candidates (LLM)",
+        "skills": "Suggesting skills (LLM)",
+        "compile": "Compiling skill",
+    },
 }
 
 
 def _stage_label(stage: str, detail: str) -> str:
     """Build the progress-bar description for a stage step."""
-    label = _STAGE_LABELS.get(stage, stage)
+    label = _STAGE_LABELS[_active_locale.get()].get(stage, stage)
     if detail:
         return f"{label}: {detail}"
     return label
@@ -135,67 +182,34 @@ def _build_llm_adapter(
     *,
     model: str | None = None,
     base_url: str | None = None,
-    api_key: str | None = None,
+    allow_fallback: bool = False,
 ) -> LLMAdapter:
-    """Build an LLM adapter from CLI flags, env vars, and a ``.env`` file.
-
-    Lookup priority for every setting is:
-    CLI flag > system environment variable > ``.env`` file > built-in default.
-    Within the env layer, the generic ``LLM_*`` keys take precedence over the
-    legacy ``OPENAI_*`` keys (both remain supported).
-
-    *kind* accepts ``mock`` (default, offline), ``openai``, or the generic
-    alias ``compatible`` — the latter two both build an
-    :class:`~book2skill.llm.openai_adapter.OpenAIAdapter`, which speaks the
-    OpenAI-compatible chat API and works with any such endpoint (OpenAI,
-    Azure, 阿里云百炼/DashScope, Ollama, vLLM, LM Studio, ...). The adapter
-    gracefully falls back to the mock when the ``openai`` package is missing
-    or no API key is set, so the pipeline never crashes offline.
-    """
-    env_file = load_env_file()
-
-    def _pick(
-        flag: str | None, env_keys: list[str], default: str | None = None
-    ) -> str | None:
-        if flag:
-            return flag
-        # System environment first (generic LLM_* preferred over OPENAI_*).
-        for key in env_keys:
-            shell = os.environ.get(key)
-            if shell:
-                return shell
-        # Then the .env file (same key order).
-        for key in env_keys:
-            if key in env_file:
-                return env_file[key]
-        return default
-
-    resolved_kind = _pick(kind, ["BOOK2SKILL_LLM"], "mock") or "mock"
-    if resolved_kind == "mock":
-        from book2skill.llm.mock_adapter import MockLLMAdapter
-
-        return MockLLMAdapter()
-    if resolved_kind in ("openai", "compatible"):
-        from book2skill.llm.openai_adapter import OpenAIAdapter
-
-        resolved_model = _pick(model, ["LLM_MODEL", "OPENAI_MODEL"]) or "gpt-4o"
-        resolved_base_url = _pick(base_url, ["LLM_BASE_URL", "OPENAI_BASE_URL"])
-        resolved_api_key = _pick(api_key, ["LLM_API_KEY", "OPENAI_API_KEY"])
-        return OpenAIAdapter(
-            model=resolved_model,
-            base_url=resolved_base_url,
-            api_key=resolved_api_key,
-        )
-    raise typer.BadParameter(
-        f"Unknown LLM adapter '{resolved_kind}'. "
-        "Expected 'mock', 'openai', or 'compatible'."
+    """Resolve the shared runtime and build its auditable adapter."""
+    from book2skill.llm.runtime import (
+        LLMRuntimeError,
+        build_llm_adapter,
+        resolve_runtime_config,
     )
+
+    try:
+        config = resolve_runtime_config(
+            kind,
+            model=model,
+            base_url=base_url,
+            allow_fallback=allow_fallback,
+            locale=_active_locale.get(),
+            env_file=load_env_file(),
+        )
+    except (LLMRuntimeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return build_llm_adapter(config)
 
 
 @app.command(name="hello")
 def hello() -> None:
     """Placeholder hello command for M0."""
-    console.print("book2skill v0.1.0 — ready for M0")
+    ready = "ready for M0" if _active_locale.get() == "en" else "已就绪（M0）"
+    console.print(f"book2skill v{__version__} — {ready}")
 
 
 @app.command(name="version")
@@ -252,16 +266,20 @@ def analyze(
         "https://dashscope.aliyuncs.com/compatible-mode/v1). "
         "Falls back to LLM_BASE_URL / OPENAI_BASE_URL env var / .env file.",
     ),
-    llm_api_key: str | None = typer.Option(
-        None,
-        "--llm-api-key",
-        help="API key for the LLM endpoint. "
-        "Falls back to LLM_API_KEY / OPENAI_API_KEY env var / .env file.",
+    allow_llm_fallback: bool = typer.Option(
+        False,
+        "--allow-llm-fallback",
+        help="Explicitly permit deterministic Mock fallback if a real LLM fails.",
     ),
 ) -> None:
     """Analyze sources without generating a final Skill (FR-03-1)."""
+    from book2skill.application.analyze import AnalyzeUseCase
+
     adapter = _build_llm_adapter(
-        llm, model=llm_model, base_url=llm_base_url, api_key=llm_api_key
+        llm,
+        model=llm_model,
+        base_url=llm_base_url,
+        allow_fallback=allow_llm_fallback,
     )
     use_case = AnalyzeUseCase(data_home=data_home, llm=adapter)
     with _ProgressCtx("Analyzing...") as on_progress:
@@ -274,22 +292,24 @@ def analyze(
 
     if result.errors:
         for err in result.errors:
-            console.print(
+            _print_diagnostic(
                 f"[red]ERROR[/red] {err.code.value}: {err.message} "
-                f"(recovery: {err.recovery})"
+                f"(recovery: {err.recovery})",
+                json_output=json_output,
             )
 
     if result.bundle is None:
-        console.print("[red]No valid sources to analyze.[/red]")
+        if json_output:
+            _write_json_error(
+                code="NO_VALID_SOURCES",
+                message="No valid sources to analyze.",
+            )
+        else:
+            console.print("[red]No valid sources to analyze.[/red]")
         raise typer.Exit(code=1)
 
     if json_output:
-        import json
-
-        bundle_json = json.dumps(
-            result.bundle.model_dump(mode="json"), indent=2, ensure_ascii=False
-        )
-        _write_stdout_utf8(bundle_json + "\n")
+        _write_json(result.bundle.model_dump(mode="json"))
     else:
         b = result.bundle
         console.print(
@@ -355,11 +375,10 @@ def batch(
         "https://dashscope.aliyuncs.com/compatible-mode/v1). "
         "Falls back to LLM_BASE_URL / OPENAI_BASE_URL env var / .env file.",
     ),
-    llm_api_key: str | None = typer.Option(
-        None,
-        "--llm-api-key",
-        help="API key for the LLM endpoint. "
-        "Falls back to LLM_API_KEY / OPENAI_API_KEY env var / .env file.",
+    allow_llm_fallback: bool = typer.Option(
+        False,
+        "--allow-llm-fallback",
+        help="Explicitly permit deterministic Mock fallback if a real LLM fails.",
     ),
     checkpoint: Path | None = typer.Option(
         None,
@@ -373,8 +392,14 @@ def batch(
     ),
 ) -> None:
     """Batch-analyze sources with per-file failure isolation (FR-02)."""
+    from book2skill.application.analyze import AnalyzeUseCase
+    from book2skill.application.batch import BatchOrchestrator
+
     adapter = _build_llm_adapter(
-        llm, model=llm_model, base_url=llm_base_url, api_key=llm_api_key
+        llm,
+        model=llm_model,
+        base_url=llm_base_url,
+        allow_fallback=allow_llm_fallback,
     )
     use_case = AnalyzeUseCase(data_home=data_home, llm=adapter)
     orchestrator = BatchOrchestrator(use_case=use_case)
@@ -464,6 +489,16 @@ def build(
         "--no-use-when",
         help="When NOT to invoke the skill (repeatable).",
     ),
+    required_input: list[str] = typer.Option(
+        None,
+        "--required-input",
+        help="Required domain input for the generated Skill (repeatable).",
+    ),
+    output: list[str] = typer.Option(
+        None,
+        "--output",
+        help="Declared domain output for the generated Skill (repeatable).",
+    ),
     output_dir: Path | None = typer.Option(
         None,
         "--output-dir",
@@ -473,7 +508,7 @@ def build(
     data_home: Path | None = typer.Option(
         None,
         "--data-home",
-        help="Directory for raw/schema storage (enables provenance enrichment).",
+        help="Directory for raw/schema storage (required with --from-analysis).",
     ),
     rights_note: str | None = typer.Option(
         None,
@@ -485,8 +520,24 @@ def build(
         "--json",
         help="Emit the BuildResult summary as JSON to stdout.",
     ),
+    llm: str | None = typer.Option(
+        None,
+        "--llm",
+        help="LLM adapter: mock (default) or openai/compatible.",
+    ),
+    llm_model: str | None = typer.Option(None, "--llm-model"),
+    llm_base_url: str | None = typer.Option(None, "--llm-base-url"),
+    allow_llm_fallback: bool = typer.Option(
+        False,
+        "--allow-llm-fallback",
+        help="Explicitly permit deterministic Mock fallback if a real LLM fails.",
+    ),
 ) -> None:
     """Full Build or Build from Analysis (FR-03-2 / FR-03-3)."""
+    from book2skill.application.build import BuildUseCase
+    from book2skill.compiler import SkillSpec
+    from book2skill.domain.errors import DomainError
+
     if not sources and from_analysis is None:
         raise typer.BadParameter(
             "Provide SOURCES or use --from-analysis <bundle.json>."
@@ -502,11 +553,30 @@ def build(
             description=description,
             use_when=list(use_when),
             do_not_use_when=list(no_use_when) if no_use_when else [],
+            required_inputs=list(required_input) if required_input else [
+                "A legally held source document or a verified analysis bundle."
+            ],
+            outputs=list(output) if output else [
+                "A concise, source-traceable response or action plan; "
+                "never raw book text."
+            ],
         )
     except ValueError as exc:
         raise typer.BadParameter(f"Invalid SkillSpec: {exc}") from exc
 
-    use_case = BuildUseCase(data_home=data_home)
+    runtime = None
+    if sources:
+        from book2skill.llm.runtime import RuntimeLLMAdapter
+
+        adapter = _build_llm_adapter(
+            llm,
+            model=llm_model,
+            base_url=llm_base_url,
+            allow_fallback=allow_llm_fallback,
+        )
+        assert isinstance(adapter, RuntimeLLMAdapter)
+        runtime = adapter.config
+    use_case = BuildUseCase(data_home=data_home, runtime_config=runtime)
 
     try:
         with _ProgressCtx("Building skill...") as on_progress:
@@ -527,33 +597,53 @@ def build(
                     on_progress=on_progress,
                 )
     except DomainError as exc:
-        console.print(
-            f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
-            f"(recovery: {exc.recovery})"
-        )
+        if json_output:
+            _print_diagnostic(
+                f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
+                f"(recovery: {exc.recovery})",
+                json_output=True,
+            )
+            _write_json_error(
+                code=exc.code.value, message=exc.message, recovery=exc.recovery
+            )
+        else:
+            console.print(
+                f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
+                f"(recovery: {exc.recovery})"
+            )
         raise typer.Exit(code=1) from exc
 
     if result.errors:
         for err in result.errors:
-            console.print(
+            _print_diagnostic(
                 f"[yellow]WARN[/yellow] {err.code.value}: {err.message} "
-                f"(recovery: {err.recovery})"
+                f"(recovery: {err.recovery})",
+                json_output=json_output,
             )
 
     if result.skill_dir is None:
-        console.print("[red]Build failed: no valid sources analysed.[/red]")
+        if json_output:
+            _write_json_error(
+                code="NO_VALID_SOURCES",
+                message="Build failed: no valid sources analysed.",
+            )
+        else:
+            console.print("[red]Build failed: no valid sources analysed.[/red]")
         raise typer.Exit(code=1)
 
     if json_output:
-        import json
-
         payload = {
             "skill_dir": str(result.skill_dir),
             "collection_id": result.collection_id,
             "source_count": len(result.source_manifests),
             "warnings": len(result.errors),
+            "analysis_run": (
+                result.bundle.analysis_run.model_dump(mode="json")
+                if result.bundle is not None and result.bundle.analysis_run is not None
+                else None
+            ),
         }
-        _write_stdout_utf8(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        _write_json(payload)
     else:
         console.print(
             f"[green]Build complete[/green] — skill: {result.skill_dir}"
@@ -623,7 +713,19 @@ def update(
     confirm: bool = typer.Option(
         False,
         "--confirm",
-        help="Atomically publish the folded-in Skill (default: dry-run plan).",
+        help=(
+            "Approve clean changed candidates and atomically publish the "
+            "folded-in Skill; open review items or conflicts still block. "
+            "Default: dry-run plan."
+        ),
+    ),
+    replace_sources: bool = typer.Option(
+        False,
+        "--replace-sources",
+        help=(
+            "Treat SOURCES as a complete replacement set; old-only knowledge "
+            "may be deprecated. Default fold-in is add-only."
+        ),
     ),
     rollback: bool = typer.Option(
         False,
@@ -638,24 +740,48 @@ def update(
     json_output: bool = typer.Option(
         False, "--json", help="Emit structured JSON to stdout."
     ),
+    llm: str | None = typer.Option(
+        None,
+        "--llm",
+        help="LLM adapter: mock (default) or openai/compatible.",
+    ),
+    llm_model: str | None = typer.Option(None, "--llm-model"),
+    llm_base_url: str | None = typer.Option(None, "--llm-base-url"),
+    allow_llm_fallback: bool = typer.Option(
+        False,
+        "--allow-llm-fallback",
+        help="Explicitly permit deterministic Mock fallback if a real LLM fails.",
+    ),
 ) -> None:
     """Update / Fold-in a published Skill (FR-03-4)."""
+    from book2skill.application.update import UpdateUseCase
+    from book2skill.compiler import SkillSpec
+    from book2skill.domain.errors import DomainError
+    from book2skill.llm.runtime import RuntimeLLMAdapter
+
     if rollback:
         if new_sources:
             raise typer.BadParameter("SOURCES cannot be combined with --rollback.")
+        if replace_sources:
+            raise typer.BadParameter(
+                "--replace-sources cannot be combined with --rollback."
+            )
         use_case = UpdateUseCase(data_home)
         try:
             record = use_case.rollback(skill_dir)
         except DomainError as exc:
-            console.print(
+            _print_diagnostic(
                 f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
-                f"(recovery: {exc.recovery})"
+                f"(recovery: {exc.recovery})",
+                json_output=json_output,
             )
+            if json_output:
+                _write_json_error(
+                    code=exc.code.value, message=exc.message, recovery=exc.recovery
+                )
             raise typer.Exit(code=1) from exc
 
         if json_output:
-            import json
-
             rb_payload: dict[str, object] = {
                 "action": record.action,
                 "skill_dir": str(record.skill_dir),
@@ -664,9 +790,7 @@ def update(
                 ),
                 "published_at": record.published_at,
             }
-            _write_stdout_utf8(
-                json.dumps(rb_payload, indent=2, ensure_ascii=False) + "\n"
-            )
+            _write_json(rb_payload)
         else:
             console.print(
                 f"[green]Rolled back[/green] — skill: {record.skill_dir}"
@@ -690,7 +814,14 @@ def update(
         except ValueError as exc:
             raise typer.BadParameter(f"Invalid SkillSpec: {exc}") from exc
 
-    use_case = UpdateUseCase(data_home)
+    adapter = _build_llm_adapter(
+        llm,
+        model=llm_model,
+        base_url=llm_base_url,
+        allow_fallback=allow_llm_fallback,
+    )
+    assert isinstance(adapter, RuntimeLLMAdapter)
+    use_case = UpdateUseCase(data_home, runtime_config=adapter.config)
     try:
         result = use_case.execute(
             skill_dir,
@@ -699,18 +830,22 @@ def update(
             collection_id=collection_id,
             rights_note=rights_note,
             confirm=confirm,
+            replace_sources=replace_sources,
         )
     except DomainError as exc:
-        console.print(
+        _print_diagnostic(
             f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
-            f"(recovery: {exc.recovery})"
+            f"(recovery: {exc.recovery})",
+            json_output=json_output,
         )
+        if json_output:
+            _write_json_error(
+                code=exc.code.value, message=exc.message, recovery=exc.recovery
+            )
         raise typer.Exit(code=1) from exc
 
     s = result.suggestion
     if json_output:
-        import json
-
         payload: dict[str, object] = {
             "published": result.published,
             "reason": result.reason,
@@ -720,7 +855,15 @@ def update(
             "deprecated": len(s.removed),
             "conflicts": len(s.conflicts),
             "new_conflicts": len(s.merge.new_conflicts) if s.merge else 0,
+            "analysis_conflicts": len(s.analysis_conflict_ids),
+            "review_items": len(s.review_item_ids),
+            "analysis_errors": len(s.analysis_errors),
             "applied_overrides": len(s.merge.applied_overrides) if s.merge else 0,
+            "analysis_run": (
+                s.analysis_run.model_dump(mode="json")
+                if s.analysis_run is not None
+                else None
+            ),
             "preserved_overrides": (
                 len(s.merge.preserved_overrides) if s.merge else 0
             ),
@@ -732,9 +875,7 @@ def update(
                 str(rec.snapshot_path) if rec.snapshot_path else None
             )
             payload["published_at"] = rec.published_at
-        _write_stdout_utf8(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-        )
+        _write_json(payload)
         return
 
     console.print(f"[bold]Update plan[/bold] — {result.skill_dir}")
@@ -794,6 +935,11 @@ def diff(
     ),
 ) -> None:
     """Diff two collections or AnalysisBundles (FR-03-4 diff engine)."""
+    from book2skill.application.diff import DiffEngine, load_diff_input
+    from book2skill.domain.errors import DomainError
+    from book2skill.storage.override_storage import OverrideStorage
+    from book2skill.storage.schema_storage import KnowledgeSchemaStorage
+
     schema_storage = (
         KnowledgeSchemaStorage(data_home) if data_home is not None else None
     )
@@ -802,10 +948,15 @@ def diff(
         old_units = load_diff_input(old, schema_storage=schema_storage)
         new_units = load_diff_input(new, schema_storage=schema_storage)
     except DomainError as exc:
-        console.print(
+        _print_diagnostic(
             f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
-            f"(recovery: {exc.recovery})"
+            f"(recovery: {exc.recovery})",
+            json_output=json_output,
         )
+        if json_output:
+            _write_json_error(
+                code=exc.code.value, message=exc.message, recovery=exc.recovery
+            )
         raise typer.Exit(code=1) from exc
 
     engine = DiffEngine()
@@ -814,17 +965,19 @@ def diff(
     merge_payload: dict[str, int] | None = None
     if merge:
         if data_home is None:
-            console.print(
-                "[red]ERROR[/red] --merge requires --data-home to load overrides."
-            )
+            message = "--merge requires --data-home to load overrides."
+            _print_diagnostic(f"[red]ERROR[/red] {message}", json_output=json_output)
+            if json_output:
+                _write_json_error(code="MERGE_DATA_HOME_REQUIRED", message=message)
             raise typer.Exit(code=1)
         # Overrides are keyed by collection; load from the *new* side when it
         # resolves to a collection_id, else from the old side.
         override_collection = new if not Path(new).is_file() else old
         if Path(override_collection).is_file():
-            console.print(
+            _print_diagnostic(
                 "[yellow]WARN[/yellow] --merge needs a collection_id for "
-                "override loading; skipping merge."
+                "override loading; skipping merge.",
+                json_output=json_output,
             )
         else:
             overrides = OverrideStorage(data_home).load_active_overrides(
@@ -843,8 +996,6 @@ def diff(
         # else: warning already printed, merge_payload stays None
 
     if json_output:
-        import json
-
         payload = {
             "added": [u.unit_id for u in result.added],
             "removed": [u.unit_id for u in result.removed],
@@ -860,9 +1011,7 @@ def diff(
         }
         if merge_payload is not None:
             payload["merge"] = merge_payload
-        _write_stdout_utf8(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-        )
+        _write_json(payload)
         return
 
     # Human-readable report.
@@ -919,13 +1068,17 @@ def validate(
     ),
 ) -> None:
     """Validate a Skill directory against quality and security gates (FR-07/FR-08)."""
+
     # Rebuild the check list so the copyright threshold is configurable.
+    from book2skill.domain.errors import DomainError
     from book2skill.validation import (
         BudgetCheck,
         CopyrightCheck,
         FrontmatterCheck,
         InjectionCheck,
+        QualityReportWriter,
         SourceCheck,
+        Validator,
     )
 
     checks = [
@@ -940,10 +1093,15 @@ def validate(
         validator = Validator(skill_dir, checks=checks)
         report = validator.validate()
     except DomainError as exc:
-        console.print(
+        _print_diagnostic(
             f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
-            f"(recovery: {exc.recovery})"
+            f"(recovery: {exc.recovery})",
+            json_output=json_output,
         )
+        if json_output:
+            _write_json_error(
+                code=exc.code.value, message=exc.message, recovery=exc.recovery
+            )
         raise typer.Exit(code=1) from exc
 
     if write:
@@ -954,12 +1112,7 @@ def validate(
             console.print(f"[green]Wrote[/green] {json_path}")
 
     if json_output:
-        import json
-
-        _write_stdout_utf8(
-            json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False)
-            + "\n"
-        )
+        _write_json(report.model_dump(mode="json"))
     else:
         console.print(f"[bold]Quality report[/bold] — {skill_dir}")
         console.print(f"  run_id:  {report.run_id}")
@@ -994,7 +1147,7 @@ def install(
         ...,
         "--host",
         "-h",
-        help=f"Target host type. One of: {', '.join(HOST_KINDS)}.",
+        help="Target host type: claude, trae, codex, project, or chatgpt.",
     ),
     project_level: bool = typer.Option(
         False,
@@ -1034,6 +1187,9 @@ def install(
     ),
 ) -> None:
     """Install a compiled Skill to a target host (FR-04 / FR-09)."""
+    from book2skill.domain.errors import DomainError
+    from book2skill.hosts import get_installer
+
     try:
         installer = get_installer(
             host,
@@ -1046,15 +1202,18 @@ def install(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     except DomainError as exc:
-        console.print(
+        _print_diagnostic(
             f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
-            f"(recovery: {exc.recovery})"
+            f"(recovery: {exc.recovery})",
+            json_output=json_output,
         )
+        if json_output:
+            _write_json_error(
+                code=exc.code.value, message=exc.message, recovery=exc.recovery
+            )
         raise typer.Exit(code=1) from exc
 
     if json_output:
-        import json
-
         payload = {
             "skill_name": record.skill_name,
             "target_dir": str(record.target_dir),
@@ -1065,7 +1224,7 @@ def install(
             "files_copied": record.files_copied,
             "dry_run": record.dry_run,
         }
-        _write_stdout_utf8(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        _write_json(payload)
         return
 
     if record.dry_run:
@@ -1094,7 +1253,7 @@ def uninstall(
         ...,
         "--host",
         "-h",
-        help=f"Target host type. One of: {', '.join(HOST_KINDS)}.",
+        help="Target host type: claude, trae, codex, project, or chatgpt.",
     ),
     project_level: bool = typer.Option(
         False,
@@ -1126,6 +1285,9 @@ def uninstall(
     ),
 ) -> None:
     """Uninstall a Skill from a target host (FR-04 / FR-09)."""
+    from book2skill.domain.errors import DomainError
+    from book2skill.hosts import get_installer
+
     try:
         installer = get_installer(
             host,
@@ -1138,15 +1300,18 @@ def uninstall(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     except DomainError as exc:
-        console.print(
+        _print_diagnostic(
             f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
-            f"(recovery: {exc.recovery})"
+            f"(recovery: {exc.recovery})",
+            json_output=json_output,
         )
+        if json_output:
+            _write_json_error(
+                code=exc.code.value, message=exc.message, recovery=exc.recovery
+            )
         raise typer.Exit(code=1) from exc
 
     if json_output:
-        import json
-
         payload = {
             "skill_name": record.skill_name,
             "target_dir": str(record.target_dir),
@@ -1157,7 +1322,7 @@ def uninstall(
             "files_copied": record.files_copied,
             "dry_run": record.dry_run,
         }
-        _write_stdout_utf8(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        _write_json(payload)
         return
 
     if record.dry_run:

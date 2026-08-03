@@ -1,6 +1,6 @@
 [project]
 name = "book2skill"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Compile legally-owned books and documents into portable Agent Skills."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -57,8 +57,15 @@ book2skill = "book2skill.cli:app"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "src/book2skill/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/book2skill"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"templates/generated-skill" = "book2skill/_resources/templates/generated-skill"
+"schemas" = "book2skill/_resources/schemas"
 
 [tool.ruff]
 target-version = "py311"

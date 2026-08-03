@@ -15,6 +15,7 @@ data_home) so they run hermetically without fixtures.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from book2skill.application.analyze import AnalyzeResult
+from book2skill.application.artifacts import (
+    load_compilation_artifact,
+    verify_compilation_artifact,
+)
 from book2skill.application.build import BuildResult, BuildUseCase
 from book2skill.application.models import (
     AnalysisBundle,
@@ -31,7 +37,15 @@ from book2skill.application.models import (
 from book2skill.cli import app
 from book2skill.compiler import SkillSpec
 from book2skill.domain.errors import DomainError, ErrorCode
-from book2skill.domain.models import Confidentiality, SourceFormat, SourceManifest
+from book2skill.domain.models import (
+    Confidentiality,
+    ExtractionMapEntry,
+    Locator,
+    LocatorKind,
+    SourceFormat,
+    SourceManifest,
+)
+from book2skill.storage import FileRawStorage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -94,7 +108,9 @@ def _bundle(
                 unit_id="cu-1",
                 kind="principle",
                 content="Always validate input before processing it further.",
-                source_refs=[{"source_id": "src1", "block_id": "src1-1"}],
+                source_refs=[
+                    {"source_id": "source123", "block_id": "source123-p1"}
+                ],
                 confidence=0.8,
                 review_status="candidate",
                 record_version=1,
@@ -103,7 +119,9 @@ def _bundle(
                 unit_id="cu-2",
                 kind="technique",
                 content="Use a hash-based deduplication step to detect conflicts.",
-                source_refs=[{"source_id": "src1", "block_id": "src1-2"}],
+                source_refs=[
+                    {"source_id": "source123", "block_id": "source123-p2"}
+                ],
                 confidence=0.7,
                 review_status="candidate",
                 record_version=1,
@@ -111,10 +129,10 @@ def _bundle(
         ]
     return AnalysisBundle(
         collection_id=collection_id,
-        source_ids=source_ids or ["src1"],
+        source_ids=source_ids or ["source123"],
         structure=[
             StructureEntry(
-                block_id="src1-1",
+                block_id="source123-p1",
                 locator={"kind": "paragraph", "paragraph": 1},
                 heading="Intro",
                 level=1,
@@ -126,6 +144,47 @@ def _bundle(
     )
 
 
+def _seed_raw_for_bundle(
+    data_home: Path,
+    bundle: AnalysisBundle,
+    *,
+    entry_source_overrides: dict[tuple[str, str], str] | None = None,
+) -> None:
+    """Persist complete Raw v1 records matching a test AnalysisBundle."""
+    storage = FileRawStorage(data_home)
+    overrides = entry_source_overrides or {}
+    for source_id in bundle.source_ids:
+        source_path = data_home.parent / "raw-inputs" / f"{source_id}.txt"
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(f"Trusted source for {source_id}.\n", encoding="utf-8")
+        content_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        manifest = _manifest(
+            source_id=source_id,
+            sha256=content_sha256,
+            original_name=source_path.name,
+        )
+        block_ids = {
+            str(ref["block_id"])
+            for candidate in bundle.candidate_units
+            for ref in candidate.source_refs
+            if ref.get("source_id") == source_id and ref.get("block_id")
+        }
+        entries = [
+            ExtractionMapEntry(
+                block_id=block_id,
+                source_id=overrides.get((source_id, block_id), source_id),
+                text_sha256=hashlib.sha256(block_id.encode()).hexdigest(),
+                locator=Locator(
+                    kind=LocatorKind.PARAGRAPH,
+                    paragraph=index,
+                ),
+                confidence=1.0,
+            )
+            for index, block_id in enumerate(sorted(block_ids), start=1)
+        ]
+        storage.save_ingest_from_path(manifest, source_path, entries)
+
+
 # ---------------------------------------------------------------------------
 # Full Build (build_from_sources)
 # ---------------------------------------------------------------------------
@@ -133,6 +192,28 @@ def _bundle(
 
 class TestBuildFromSources:
     """End-to-end Full Build tests."""
+
+    def test_full_build_rejects_unverified_analysis_bundle(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Full Build must not trust an adapter result without Raw evidence."""
+        bundle = _bundle()
+        use_case = BuildUseCase()
+        monkeypatch.setattr(
+            use_case._analyze,
+            "execute",
+            lambda *_args, **_kwargs: AnalyzeResult(bundle=bundle),
+        )
+
+        with pytest.raises(DomainError) as exc_info:
+            use_case.build_from_sources(
+                [str(tmp_path / "ignored.txt")],
+                _spec(),
+                output_dir=tmp_path / "out",
+            )
+
+        assert exc_info.value.code == ErrorCode.BUILD_SOURCE_TRACE_INVALID
+        assert not (tmp_path / "out").exists()
 
     def test_single_txt_produces_skill_directory(self, tmp_path: Path) -> None:
         f = _write_txt(
@@ -145,11 +226,21 @@ class TestBuildFromSources:
             [str(f)], _spec(), output_dir=tmp_path / "out"
         )
         assert result.skill_dir is not None
+        # A standalone draft without persisted source manifests is useful for
+        # review but intentionally cannot satisfy the publication gate yet.
+        assert result.publication_ready is False
         assert (result.skill_dir / "SKILL.md").exists()
         assert (result.skill_dir / "references").is_dir()
         assert (result.skill_dir / "assets").is_dir()
         assert (result.skill_dir / "provenance.yml").exists()
         assert (result.skill_dir / "quality-report.md").exists()
+        assert (result.skill_dir / "quality-report.json").exists()
+        assert (result.skill_dir / "analysis-run.json").exists()
+        artifact = load_compilation_artifact(result.skill_dir)
+        assert artifact is not None
+        assert result.artifact is not None
+        assert artifact.artifact_id == result.artifact.artifact_id
+        assert verify_compilation_artifact(result.skill_dir, artifact)
 
     def test_skill_md_contains_spec_fields(self, tmp_path: Path) -> None:
         f = _write_txt(
@@ -222,6 +313,31 @@ class TestBuildFromSources:
             assert "unit_id" in obj
             assert "kind" in obj
 
+    def test_repeated_build_does_not_duplicate_schema_history(
+        self, tmp_path: Path
+    ) -> None:
+        source = _write_txt(
+            tmp_path / "book.txt",
+            "You should always validate input carefully before processing.",
+        )
+        data_home = tmp_path / "data"
+        output_dir = tmp_path / "out"
+        use_case = BuildUseCase(data_home=data_home)
+
+        first = use_case.build_from_sources(
+            [str(source)], _spec(), output_dir=output_dir
+        )
+        assert first.collection_id is not None
+        units_path = data_home / "schema" / first.collection_id / "units.jsonl"
+        before = units_path.read_text(encoding="utf-8")
+
+        second = use_case.build_from_sources(
+            [str(source)], _spec(), output_dir=output_dir
+        )
+
+        assert second.collection_id == first.collection_id
+        assert units_path.read_text(encoding="utf-8") == before
+
     def test_provenance_enriched_with_real_manifest(self, tmp_path: Path) -> None:
         """Full Build with data_home loads SourceManifest for provenance."""
         f = _write_txt(
@@ -234,6 +350,7 @@ class TestBuildFromSources:
             [str(f)], _spec(), output_dir=tmp_path / "out"
         )
         assert result.skill_dir is not None
+        assert result.publication_ready is True
         provenance = (
             result.skill_dir / "provenance.yml"
         ).read_text(encoding="utf-8")
@@ -310,12 +427,46 @@ class TestBuildFromSources:
             output_dir=tmp_path / "out",
             budget=TokenBudget(target_min=1, target_max=10, hard_max=10),
         )
-        use_case = BuildUseCase(writer=tight_writer)
+        data_home = tmp_path / "data"
+        use_case = BuildUseCase(writer=tight_writer, data_home=data_home)
         with pytest.raises(DomainError) as exc:
             use_case.build_from_sources([str(f)], _spec())
         assert exc.value.code == ErrorCode.BUILD_BUDGET_EXCEEDED
         # No SKILL.md should be left behind on failure.
         assert not (tmp_path / "out" / "SKILL.md").exists()
+        # Schema is committed only after compilation succeeds.
+        assert not (data_home / "schema").exists()
+
+    def test_schema_failure_restores_previous_draft_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = _write_txt(
+            tmp_path / "book.txt",
+            "You should always validate input carefully before processing.",
+        )
+        data_home = tmp_path / "data"
+        output_dir = tmp_path / "out"
+        BuildUseCase(data_home=data_home).build_from_sources(
+            [str(source)], _spec(), output_dir=output_dir
+        )
+        old_skill = (output_dir / "SKILL.md").read_text(encoding="utf-8")
+
+        def fail_schema(
+            _collection_id: str, _units: list[object]
+        ) -> Path:
+            raise OSError("simulated Schema failure")
+
+        monkeypatch.setattr(
+            "book2skill.storage.schema_storage.KnowledgeSchemaStorage.save_units_atomic",
+            fail_schema,
+        )
+        with pytest.raises(DomainError) as exc_info:
+            BuildUseCase(data_home=data_home).build_from_sources(
+                [str(source)], _spec(), output_dir=output_dir
+            )
+
+        assert exc_info.value.code == ErrorCode.SCHEMA_VALIDATION_FAILED
+        assert (output_dir / "SKILL.md").read_text(encoding="utf-8") == old_skill
 
     def test_explicit_output_dir_overrides_writer(self, tmp_path: Path) -> None:
         """output_dir arg wins over an injected writer's pre-set directory."""
@@ -351,7 +502,9 @@ class TestBuildFromBundle:
         bundle_path.write_text(
             bundle.model_dump_json(indent=2), encoding="utf-8"
         )
-        use_case = BuildUseCase()
+        data_home = tmp_path / "data"
+        _seed_raw_for_bundle(data_home, bundle)
+        use_case = BuildUseCase(data_home=data_home)
         result = use_case.build_from_bundle(
             bundle_path, _spec(), output_dir=tmp_path / "out"
         )
@@ -395,14 +548,17 @@ class TestBuildFromBundle:
         assert exc.value.code == ErrorCode.BUILD_INPUT_INVALID
         assert "no candidate_units" in exc.value.message
 
-    def test_from_bundle_provenance_marks_unknown(self, tmp_path: Path) -> None:
-        """Without RawStorage, from-bundle provenance falls back to unknown."""
+    def test_from_bundle_provenance_uses_verified_manifest(
+        self, tmp_path: Path
+    ) -> None:
         bundle = _bundle()
         bundle_path = tmp_path / "bundle.json"
         bundle_path.write_text(
             bundle.model_dump_json(indent=2), encoding="utf-8"
         )
-        use_case = BuildUseCase()
+        data_home = tmp_path / "data"
+        _seed_raw_for_bundle(data_home, bundle)
+        use_case = BuildUseCase(data_home=data_home)
         result = use_case.build_from_bundle(
             bundle_path, _spec(), output_dir=tmp_path / "out"
         )
@@ -410,12 +566,8 @@ class TestBuildFromBundle:
         provenance = (
             result.skill_dir / "provenance.yml"
         ).read_text(encoding="utf-8")
-        # No manifests available in from-bundle mode → unknown stub or empty.
-        assert (
-            "content_sha256: unknown" in provenance
-            or "no sources recorded" in provenance
-            or "sources: []" in provenance
-        )
+        assert "content_sha256: unknown" not in provenance
+        assert "source123" in provenance
 
     def test_from_bundle_same_spec_renders_same_skill_md(
         self, tmp_path: Path
@@ -427,7 +579,9 @@ class TestBuildFromBundle:
             bundle.model_dump_json(indent=2), encoding="utf-8"
         )
         spec = _spec()
-        use_case = BuildUseCase()
+        data_home = tmp_path / "data"
+        _seed_raw_for_bundle(data_home, bundle)
+        use_case = BuildUseCase(data_home=data_home)
         r1 = use_case.build_from_bundle(
             bundle_path, spec, output_dir=tmp_path / "from-bundle"
         )
@@ -445,6 +599,153 @@ class TestBuildFromBundle:
         from_sources = (r2.skill_dir / "SKILL.md").read_text(encoding="utf-8")
         # Compare the frontmatter block (between --- markers).
         assert from_bundle.split("---")[1] == from_sources.split("---")[1]
+
+    def test_missing_raw_storage_fails_closed(self, tmp_path: Path) -> None:
+        bundle = _bundle()
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(bundle.model_dump_json(), encoding="utf-8")
+
+        with pytest.raises(DomainError) as exc:
+            BuildUseCase().build_from_bundle(
+                bundle_path, _spec(), output_dir=tmp_path / "out"
+            )
+
+        assert exc.value.code == ErrorCode.BUILD_SOURCE_TRACE_INVALID
+        assert "data-home" in exc.value.recovery
+        assert not (tmp_path / "out").exists()
+
+    def test_duplicate_source_ids_rejected_before_build(
+        self, tmp_path: Path
+    ) -> None:
+        data = _bundle().model_dump(mode="json")
+        data["source_ids"] = ["source123", "source123"]
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(json.dumps(data), encoding="utf-8")
+
+        with pytest.raises(DomainError) as exc:
+            BuildUseCase(data_home=tmp_path / "data").build_from_bundle(
+                bundle_path, _spec(), output_dir=tmp_path / "out"
+            )
+
+        assert exc.value.code == ErrorCode.BUILD_INPUT_INVALID
+        assert "source_ids must be unique" in exc.value.message
+
+    def test_candidate_ref_source_must_be_declared(self, tmp_path: Path) -> None:
+        candidate = _bundle().candidate_units[0].model_copy(
+            update={
+                "source_refs": [
+                    {"source_id": "other-source", "block_id": "other-p1"}
+                ]
+            }
+        )
+        bundle = _bundle(candidate_units=[candidate])
+        data_home = tmp_path / "data"
+        _seed_raw_for_bundle(data_home, bundle)
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(bundle.model_dump_json(), encoding="utf-8")
+
+        with pytest.raises(DomainError) as exc:
+            BuildUseCase(data_home=data_home).build_from_bundle(
+                bundle_path, _spec(), output_dir=tmp_path / "out"
+            )
+
+        assert exc.value.code == ErrorCode.BUILD_SOURCE_TRACE_INVALID
+        assert "undeclared source_id" in exc.value.message
+
+    @pytest.mark.parametrize(
+        "source_ref",
+        [
+            {"block_id": "source123-p1"},
+            {"source_id": "source123"},
+            {"source_id": "", "block_id": "source123-p1"},
+            {"source_id": "source123", "block_id": ""},
+        ],
+    )
+    def test_candidate_ref_requires_nonempty_source_and_block_ids(
+        self, tmp_path: Path, source_ref: dict[str, str]
+    ) -> None:
+        candidate = _bundle().candidate_units[0].model_copy(
+            update={"source_refs": [source_ref]}
+        )
+        bundle = _bundle(candidate_units=[candidate])
+        data_home = tmp_path / "data"
+        _seed_raw_for_bundle(data_home, bundle)
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(bundle.model_dump_json(), encoding="utf-8")
+
+        with pytest.raises(DomainError) as exc:
+            BuildUseCase(data_home=data_home).build_from_bundle(
+                bundle_path, _spec(), output_dir=tmp_path / "out"
+            )
+
+        assert exc.value.code == ErrorCode.BUILD_SOURCE_TRACE_INVALID
+        assert "invalid" in exc.value.message
+
+    def test_declared_source_requires_complete_raw_version(
+        self, tmp_path: Path
+    ) -> None:
+        bundle = _bundle()
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(bundle.model_dump_json(), encoding="utf-8")
+
+        with pytest.raises(DomainError) as exc:
+            BuildUseCase(data_home=tmp_path / "empty-data").build_from_bundle(
+                bundle_path, _spec(), output_dir=tmp_path / "out"
+            )
+
+        assert exc.value.code == ErrorCode.BUILD_SOURCE_TRACE_INVALID
+        assert "Raw version 1" in exc.value.message
+
+    def test_candidate_block_must_exist_in_extraction_map(
+        self, tmp_path: Path
+    ) -> None:
+        trusted = _bundle()
+        data_home = tmp_path / "data"
+        _seed_raw_for_bundle(data_home, trusted)
+        candidate = trusted.candidate_units[0].model_copy(
+            update={
+                "source_refs": [
+                    {"source_id": "source123", "block_id": "missing-block"}
+                ]
+            }
+        )
+        edited = _bundle(candidate_units=[candidate])
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(edited.model_dump_json(), encoding="utf-8")
+
+        with pytest.raises(DomainError) as exc:
+            BuildUseCase(data_home=data_home).build_from_bundle(
+                bundle_path, _spec(), output_dir=tmp_path / "out"
+            )
+
+        assert exc.value.code == ErrorCode.BUILD_SOURCE_TRACE_INVALID
+        assert "not found in the Raw extraction map" in exc.value.message
+        assert not (
+            data_home / "schema" / edited.collection_id / "units.jsonl"
+        ).exists()
+
+    def test_extraction_map_block_source_must_match(
+        self, tmp_path: Path
+    ) -> None:
+        bundle = _bundle(candidate_units=[_bundle().candidate_units[0]])
+        data_home = tmp_path / "data"
+        _seed_raw_for_bundle(
+            data_home,
+            bundle,
+            entry_source_overrides={
+                ("source123", "source123-p1"): "other-source"
+            },
+        )
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(bundle.model_dump_json(), encoding="utf-8")
+
+        with pytest.raises(DomainError) as exc:
+            BuildUseCase(data_home=data_home).build_from_bundle(
+                bundle_path, _spec(), output_dir=tmp_path / "out"
+            )
+
+        assert exc.value.code == ErrorCode.BUILD_SOURCE_TRACE_INVALID
+        assert "belongs to source" in exc.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -472,12 +773,20 @@ class TestBuildCLI:
                 "A skill built via the CLI for end-to-end verification.",
                 "--use-when",
                 "When testing the CLI.",
+                "--required-input",
+                "A confirmed implementation brief.",
+                "--output",
+                "A traceable delivery checklist.",
                 "--output-dir",
                 str(tmp_path / "cli-out"),
             ],
         )
         assert result.exit_code == 0, result.stdout
-        assert (tmp_path / "cli-out" / "SKILL.md").exists()
+        skill_md = (tmp_path / "cli-out" / "SKILL.md")
+        assert skill_md.exists()
+        rendered = skill_md.read_text(encoding="utf-8")
+        assert "- A confirmed implementation brief." in rendered
+        assert "- A traceable delivery checklist." in rendered
 
     def test_build_from_analysis_succeeds(self, tmp_path: Path) -> None:
         bundle = _bundle()
@@ -485,6 +794,8 @@ class TestBuildCLI:
         bundle_path.write_text(
             bundle.model_dump_json(indent=2), encoding="utf-8"
         )
+        data_home = tmp_path / "data"
+        _seed_raw_for_bundle(data_home, bundle)
         runner = CliRunner()
         result = runner.invoke(
             app,
@@ -498,6 +809,8 @@ class TestBuildCLI:
                 "A skill built from an AnalysisBundle JSON via the CLI.",
                 "--use-when",
                 "When resuming from a saved analysis.",
+                "--data-home",
+                str(data_home),
                 "--output-dir",
                 str(tmp_path / "cli-out"),
             ],

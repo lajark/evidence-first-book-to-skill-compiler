@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from book2skill.config import load_env_file
-from book2skill.llm.mock_adapter import MockLLMAdapter
+from book2skill.config import load_env_file, resolve_locale
+from book2skill.llm.runtime import RuntimeLLMAdapter
 
 
 class TestParseEnvFile:
@@ -78,6 +78,32 @@ class TestParseEnvFile:
         assert os.environ.get("BOOK2SKILL_TEST_KEY") is None
 
 
+class TestLocaleResolution:
+    """Locale accepts stable tags and keeps the documented priority order."""
+
+    def test_defaults_to_simplified_chinese(self) -> None:
+        assert resolve_locale(environment={}, env_file={}) == "zh-CN"
+
+    def test_cli_value_beats_environment_and_env_file(self) -> None:
+        assert (
+            resolve_locale(
+                "en",
+                environment={"BOOK2SKILL_LOCALE": "zh-CN"},
+                env_file={"BOOK2SKILL_LOCALE": "zh-CN"},
+            )
+            == "en"
+        )
+
+    def test_alias_and_invalid_value_handling(self) -> None:
+        assert resolve_locale(environment={"BOOK2SKILL_LOCALE": "en_US"}) == "en"
+        try:
+            resolve_locale(environment={"BOOK2SKILL_LOCALE": "fr"})
+        except ValueError as exc:
+            assert "zh-CN, en" in str(exc)
+        else:  # pragma: no cover - assertion guard
+            raise AssertionError("unsupported locale must fail")
+
+
 class TestCliLlmResolution:
     """_build_llm_adapter resolves config from .env with correct priority."""
 
@@ -102,13 +128,13 @@ class TestCliLlmResolution:
         )
 
         from book2skill.cli import _build_llm_adapter
-        from book2skill.llm.openai_adapter import OpenAIAdapter
+        from book2skill.llm.runtime import RuntimeLLMAdapter
 
         adapter = _build_llm_adapter(None)
-        assert isinstance(adapter, OpenAIAdapter)
-        assert adapter._model == "qwen2.5:7b"  # noqa: SLF001
-        assert adapter._api_key == "sk-from-file"  # noqa: SLF001
-        assert adapter._base_url == "http://localhost:11434/v1"  # noqa: SLF001
+        assert isinstance(adapter, RuntimeLLMAdapter)
+        assert adapter.config.model == "qwen2.5:7b"
+        assert adapter.config.api_key == "sk-from-file"
+        assert adapter.config.base_url == "http://localhost:11434/v1"
 
     def test_cli_flag_overrides_env_file(self, tmp_path: Path, monkeypatch) -> None:
         for k in ("BOOK2SKILL_LLM", "OPENAI_MODEL"):
@@ -123,7 +149,8 @@ class TestCliLlmResolution:
 
         # Explicit --llm mock beats .env's openai.
         adapter = _build_llm_adapter("mock")
-        assert isinstance(adapter, MockLLMAdapter)
+        assert isinstance(adapter, RuntimeLLMAdapter)
+        assert adapter.config.provider == "mock"
 
     def test_shell_env_overrides_env_file(
         self, tmp_path: Path, monkeypatch
@@ -134,13 +161,14 @@ class TestCliLlmResolution:
             encoding="utf-8",
         )
         monkeypatch.setenv("OPENAI_MODEL", "from-shell")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-shell")
 
         from book2skill.cli import _build_llm_adapter
-        from book2skill.llm.openai_adapter import OpenAIAdapter
+        from book2skill.llm.runtime import RuntimeLLMAdapter
 
         adapter = _build_llm_adapter(None)
-        assert isinstance(adapter, OpenAIAdapter)
-        assert adapter._model == "from-shell"  # noqa: SLF001
+        assert isinstance(adapter, RuntimeLLMAdapter)
+        assert adapter.config.model == "from-shell"
 
     def test_defaults_to_mock_without_config(
         self, tmp_path: Path, monkeypatch
@@ -157,7 +185,8 @@ class TestCliLlmResolution:
         from book2skill.cli import _build_llm_adapter
 
         adapter = _build_llm_adapter(None)
-        assert isinstance(adapter, MockLLMAdapter)
+        assert isinstance(adapter, RuntimeLLMAdapter)
+        assert adapter.config.provider == "mock"
 
     def test_compatible_alias_routes_to_openai_adapter(
         self, tmp_path: Path, monkeypatch
@@ -173,17 +202,16 @@ class TestCliLlmResolution:
             "OPENAI_MODEL",
         ):
             monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
         monkeypatch.chdir(tmp_path)
 
         from book2skill.cli import _build_llm_adapter
-        from book2skill.llm.openai_adapter import OpenAIAdapter
+        from book2skill.llm.runtime import RuntimeLLMAdapter
 
-        adapter = _build_llm_adapter(
-            "compatible", api_key="sk-test", model="qwen-plus"
-        )
-        assert isinstance(adapter, OpenAIAdapter)
-        assert adapter._model == "qwen-plus"  # noqa: SLF001
-        assert adapter._api_key == "sk-test"  # noqa: SLF001
+        adapter = _build_llm_adapter("compatible", model="qwen-plus")
+        assert isinstance(adapter, RuntimeLLMAdapter)
+        assert adapter.config.model == "qwen-plus"
+        assert adapter.config.api_key == "sk-test"
 
     def test_llm_env_vars_preferred_over_openai(
         self, tmp_path: Path, monkeypatch
@@ -198,15 +226,15 @@ class TestCliLlmResolution:
         monkeypatch.chdir(tmp_path)  # no .env file
 
         from book2skill.cli import _build_llm_adapter
-        from book2skill.llm.openai_adapter import OpenAIAdapter
+        from book2skill.llm.runtime import RuntimeLLMAdapter
 
         adapter = _build_llm_adapter("compatible")
-        assert isinstance(adapter, OpenAIAdapter)
-        assert adapter._api_key == "sk-generic"  # noqa: SLF001
-        assert adapter._base_url == (  # noqa: SLF001
+        assert isinstance(adapter, RuntimeLLMAdapter)
+        assert adapter.config.api_key == "sk-generic"
+        assert adapter.config.base_url == (
             "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
-        assert adapter._model == "qwen-plus"  # noqa: SLF001
+        assert adapter.config.model == "qwen-plus"
 
     def test_llm_env_vars_from_env_file(self, tmp_path: Path, monkeypatch) -> None:
         """LLM_* keys in .env are picked up (Bailian example)."""
@@ -230,12 +258,12 @@ class TestCliLlmResolution:
         )
 
         from book2skill.cli import _build_llm_adapter
-        from book2skill.llm.openai_adapter import OpenAIAdapter
+        from book2skill.llm.runtime import RuntimeLLMAdapter
 
         adapter = _build_llm_adapter(None)
-        assert isinstance(adapter, OpenAIAdapter)
-        assert adapter._api_key == "sk-bailian"  # noqa: SLF001
-        assert adapter._model == "qwen-plus"  # noqa: SLF001
-        assert adapter._base_url == (  # noqa: SLF001
+        assert isinstance(adapter, RuntimeLLMAdapter)
+        assert adapter.config.api_key == "sk-bailian"
+        assert adapter.config.model == "qwen-plus"
+        assert adapter.config.base_url == (
             "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )

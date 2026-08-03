@@ -251,6 +251,31 @@ class TestConflictDetection:
         for c in detect_conflicts([principle, anti]):
             assert c.status == "open"
 
+    def test_conflict_scan_keeps_relevant_pair_with_many_unrelated_units(self) -> None:
+        principle = _unit(
+            unit_id="ku-principle",
+            kind=UnitKind.PRINCIPLE,
+            content="always validate source data before publishing",
+        )
+        anti = _unit(
+            unit_id="ku-anti",
+            kind=UnitKind.ANTI_PATTERN,
+            content="never validate source data before publishing",
+        )
+        unrelated = [
+            _unit(
+                unit_id=f"ku-term-{index}",
+                kind=UnitKind.TERM,
+                content=f"unrelated glossary token {index}",
+            )
+            for index in range(100)
+        ]
+
+        conflicts = detect_conflicts([*unrelated, principle, anti])
+
+        assert len(conflicts) == 1
+        assert set(conflicts[0].unit_ids) == {"ku-principle", "ku-anti"}
+
 
 class TestVersioning:
     def test_latest_record_picks_highest_version(self) -> None:

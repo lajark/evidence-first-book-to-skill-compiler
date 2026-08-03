@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from book2skill.storage import (
     StoragePathError,
     resolve_within,
 )
+from book2skill.storage import file_storage as file_storage_module
 
 
 @pytest.fixture()
@@ -115,6 +117,82 @@ def test_save_and_load_extraction_map(
     assert len(loaded) == len(sample_entries)
     assert loaded[0].block_id == "blk-1"
     assert loaded[1].locator.chapter == "intro"
+
+
+def test_save_ingest_from_path_commits_complete_version(
+    raw_storage: FileRawStorage,
+    sample_manifest: SourceManifest,
+    sample_entries: list[ExtractionMapEntry],
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"complete source")
+    manifest = sample_manifest.model_copy(
+        update={"content_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    )
+
+    raw_storage.save_ingest_from_path(manifest, source, sample_entries)
+
+    assert raw_storage.exists(manifest.source_id, manifest.version)
+    assert (
+        raw_storage.load_original(manifest.source_id, manifest.version)
+        == b"complete source"
+    )
+    assert raw_storage.load_extraction_map(
+        manifest.source_id, manifest.version
+    ) == sample_entries
+
+
+def test_save_ingest_from_path_cleans_failed_staging_version(
+    raw_storage: FileRawStorage,
+    sample_manifest: SourceManifest,
+    sample_entries: list[ExtractionMapEntry],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"complete source")
+    manifest = sample_manifest.model_copy(
+        update={"content_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    )
+    real_atomic_write = file_storage_module.atomic_write
+
+    def fail_extraction_map(path: Path, content: str | bytes) -> None:
+        if path.name == "extraction-map.jsonl":
+            raise OSError("injected map write failure")
+        real_atomic_write(path, content)
+
+    monkeypatch.setattr(file_storage_module, "atomic_write", fail_extraction_map)
+
+    with pytest.raises(OSError, match="injected map write failure"):
+        raw_storage.save_ingest_from_path(manifest, source, sample_entries)
+
+    assert not raw_storage._version_dir(  # type: ignore[misc]
+        manifest.source_id, manifest.version
+    ).exists()
+
+
+def test_save_ingest_from_path_repairs_matching_incomplete_version(
+    raw_storage: FileRawStorage,
+    sample_manifest: SourceManifest,
+    sample_entries: list[ExtractionMapEntry],
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"complete source")
+    manifest = sample_manifest.model_copy(
+        update={"content_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    )
+    raw_storage.save_manifest(manifest)
+    assert not raw_storage.exists(manifest.source_id, manifest.version)
+
+    raw_storage.save_ingest_from_path(manifest, source, sample_entries)
+
+    assert raw_storage.exists(manifest.source_id, manifest.version)
+    assert (
+        raw_storage.load_original(manifest.source_id, manifest.version)
+        == b"complete source"
+    )
 
 
 def test_manifest_schema_round_trip(

@@ -76,11 +76,27 @@ def rtf_to_text(raw: bytes) -> str:
     result: list[str] = []
     i = 0
     n = len(text)
-    # Stack of destination-group flags; True = skip content.
+    # Stack of destination-group flags plus its count.  Consulting
+    # ``any(skip_stack)`` for every input character becomes O(depth) on a
+    # deeply nested ignorable group; the count keeps the hot-path O(1).
     skip_stack: list[bool] = [False]
+    skipped_group_count = 0
 
     def _skipping() -> bool:
-        return any(skip_stack)
+        return skipped_group_count > 0
+
+    def _push_skip(value: bool) -> None:
+        nonlocal skipped_group_count
+        skip_stack.append(value)
+        if value:
+            skipped_group_count += 1
+
+    def _pop_skip() -> None:
+        nonlocal skipped_group_count
+        if len(skip_stack) <= 1:
+            return
+        if skip_stack.pop():
+            skipped_group_count -= 1
 
     while i < n:
         ch = text[i]
@@ -91,16 +107,15 @@ def rtf_to_text(raw: bytes) -> str:
             if peek < n and text[peek] == "\\":
                 peek2 = peek + 1
                 if peek2 < n and text[peek2] == "*":
-                    skip_stack.append(True)
+                    _push_skip(True)
                     i = peek2 + 1
                     continue
-            skip_stack.append(_skipping())
+            _push_skip(_skipping())
             i += 1
             continue
 
         if ch == "}":
-            if len(skip_stack) > 1:
-                skip_stack.pop()
+            _pop_skip()
             i += 1
             continue
 
@@ -113,7 +128,7 @@ def rtf_to_text(raw: bytes) -> str:
             # should be skipped even without the \* ignorable prefix.
             dest = _peek_control_word(text, i)
             if dest in _SKIP_DESTINATIONS:
-                skip_stack.append(True)
+                _push_skip(True)
                 i = _skip_control_word(text, i)
                 continue
 

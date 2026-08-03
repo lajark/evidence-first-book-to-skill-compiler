@@ -53,7 +53,7 @@ class RawStorage(Protocol):
         ...
 
     def exists(self, source_id: str, version: int) -> bool:
-        """Return True if the version directory exists."""
+        """Return True if original, manifest and extraction map all exist."""
         ...
 
     def list_versions(self, source_id: str) -> list[int]:

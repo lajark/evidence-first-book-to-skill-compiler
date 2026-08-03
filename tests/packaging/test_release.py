@@ -134,3 +134,20 @@ class TestReleasePackage:
         zip_path, _ = _release(repo_root, tmp_path, wheel=wheel)
         with zipfile.ZipFile(zip_path) as zf:
             assert "dist/book2skill-0.1.0-py3-none-any.whl" in _zip_members(zf)
+
+    def test_assembly_does_not_buffer_payload_files_for_checksums(
+        self, repo_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Release checksums must stream hashes instead of Path.read_bytes()."""
+        original_read_bytes = Path.read_bytes
+
+        def reject_release_payload_buffering(path: Path) -> bytes:
+            if path.suffix in {".json", ".md", ".py", ".txt"}:
+                raise AssertionError(f"release buffered payload {path}")
+            return original_read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", reject_release_payload_buffering)
+
+        zip_path, _ = _release(repo_root, tmp_path)
+
+        assert zip_path.exists()

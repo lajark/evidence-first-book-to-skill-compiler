@@ -42,6 +42,7 @@ from book2skill.application.models import (
     FileOutcome,
     FileStatus,
 )
+from book2skill.llm.runtime import LLMRuntimeConfig
 from book2skill.storage.file_storage import atomic_write
 
 #: Progress callback signature: ``(index, total, path)`` where *index* is the
@@ -109,9 +110,12 @@ class BatchOrchestrator:
         use_case: AnalyzeUseCase | None = None,
         data_home: Path | None = None,
         max_workers: int = 1,
+        runtime_config: LLMRuntimeConfig | None = None,
     ) -> None:
         self._gate = gate or Gate()
-        self._use_case = use_case or AnalyzeUseCase(data_home=data_home)
+        self._use_case = use_case or AnalyzeUseCase(
+            data_home=data_home, runtime_config=runtime_config
+        )
         self._max_workers = max(1, max_workers)
 
     def execute(
@@ -280,8 +284,8 @@ class BatchOrchestrator:
         self, discovered: DiscoveredFile, rights_note: str | None
     ) -> FileOutcome:
         """Analyse a single discovered file and build its :class:`FileOutcome`."""
-        result = self._use_case.execute(
-            [str(discovered.path)],
+        result = self._use_case.execute_discovered(
+            [discovered],
             rights_note=rights_note,
         )
 

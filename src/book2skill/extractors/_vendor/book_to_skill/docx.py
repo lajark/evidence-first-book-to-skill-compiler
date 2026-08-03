@@ -12,7 +12,8 @@
 #   - Adjusted import to use the vendored `exceptions` module within this package.
 #   - Removed the `extract_docx` orchestrator and its `print` debug logging;
 #     backend selection is handled by the DocxExtractor wrapper instead.
-#   - No other functional changes to the extraction or validation logic.
+#   - XML safety scan uses one encoding decision per member and enforces
+#     per-member / aggregate decompression budgets before reading XML bytes.
 
 """DOCX text extraction with optional python-docx backend and stdlib fallback.
 
@@ -26,6 +27,10 @@ import sys
 import zipfile
 
 from book2skill.extractors._vendor.book_to_skill.exceptions import ExtractionError
+
+_XML_SUFFIXES = (".xml", ".rels")
+_MAX_XML_MEMBER_BYTES = 16 * 1024 * 1024
+_MAX_TOTAL_XML_BYTES = 64 * 1024 * 1024
 
 
 def extract_docx_with_python_docx(docx_path: str) -> str | None:
@@ -105,21 +110,54 @@ def validate_docx_xml_safety(docx_path: str) -> None:
     Expansion (Billion Laughs) and XXE injections."""
     try:
         with zipfile.ZipFile(docx_path) as zf:
-            for name in zf.namelist():
-                if name.endswith(".xml") or name.endswith(".rels"):
-                    xml_bytes = zf.read(name)
-                    for encoding in ("utf-8", "utf-16", "utf-16le", "utf-16be", "utf-32"):
-                        try:
-                            content = xml_bytes.decode(encoding, errors="ignore").upper()
-                        except LookupError:
-                            continue
-                        if "<!DOCTYPE" in content or "<!ENTITY" in content:
-                            raise ExtractionError(
-                                f"Security validation failed: XML file '{name}' in DOCX archive contains forbidden DTD or entity declarations."
-                            )
+            total_xml_bytes = 0
+            for info in zf.infolist():
+                if not info.filename.endswith(_XML_SUFFIXES):
+                    continue
+                total_xml_bytes += info.file_size
+                if (
+                    info.file_size > _MAX_XML_MEMBER_BYTES
+                    or total_xml_bytes > _MAX_TOTAL_XML_BYTES
+                ):
+                    raise ExtractionError(
+                        f"Security validation failed: XML file '{info.filename}' "
+                        "exceeds the XML safety budget."
+                    )
+                content = _decode_xml_for_safety(zf.read(info)).casefold()
+                if "<!doctype" in content or "<!entity" in content:
+                    raise ExtractionError(
+                        f"Security validation failed: XML file '{info.filename}' "
+                        "in DOCX archive contains forbidden DTD or entity declarations."
+                    )
     except zipfile.BadZipFile as e:
         raise ExtractionError(f"Invalid DOCX file: {e}")
     except ExtractionError:
         raise
     except Exception as e:
         raise ExtractionError(f"Error during security validation of DOCX archive: {e}")
+
+
+def _decode_xml_for_safety(xml_bytes: bytes) -> str:
+    """Decode an XML member once using BOM or byte-order inspection.
+
+    XML declarations are ASCII-compatible, so examining the first four bytes
+    covers BOM-less UTF-16/32 documents without attempting several full-size
+    decodes of the same archive member.
+    """
+    if xml_bytes.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        encoding = "utf-32"
+    elif xml_bytes.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encoding = "utf-16"
+    elif xml_bytes.startswith(b"\xef\xbb\xbf"):
+        encoding = "utf-8-sig"
+    elif xml_bytes.startswith(b"<\x00?\x00"):
+        encoding = "utf-16le"
+    elif xml_bytes.startswith(b"\x00<\x00?"):
+        encoding = "utf-16be"
+    elif xml_bytes.startswith(b"<\x00\x00\x00"):
+        encoding = "utf-32le"
+    elif xml_bytes.startswith(b"\x00\x00\x00<"):
+        encoding = "utf-32be"
+    else:
+        encoding = "utf-8"
+    return xml_bytes.decode(encoding, errors="ignore")

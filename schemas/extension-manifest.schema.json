@@ -49,10 +49,12 @@
               "version": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "entry_points": {
       "type": "array",
@@ -80,5 +82,5 @@
       "const": "checksums.sha256"
     }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

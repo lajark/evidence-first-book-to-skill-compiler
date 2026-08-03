@@ -2,11 +2,12 @@
 
 The :class:`Validator` runs every check in a fixed order and aggregates the
 results into a :class:`~book2skill.validation.models.QualityReport` that
-conforms to ``schemas/quality-report.schema.json``. The report is always
+conforms to ``schemas/quality-report.schema.json``. Validator results use
 ``published=False`` because validation is read-only: it never triggers
 :class:`~book2skill.application.publisher.Publisher` and never swaps the
 Skill directory, so a failed validation cannot overwrite a previously
-published version (PRD FR-07 / FR-10).
+published version (PRD FR-07 / FR-10). Publisher may copy a passing result
+with ``published=True`` into the staged tree it commits.
 
 :class:`QualityReportWriter` renders the report two ways:
 

@@ -12,8 +12,10 @@ from book2skill.validation.models import (
     BaseCheck,
     CheckStatus,
     Finding,
+    QualityReport,
     ReportStatus,
 )
+from book2skill.validation.publication_gate import evaluate_publication_quality
 from book2skill.validation.quality_report import QualityReportWriter, Validator
 
 _VALID_FRONTMATTER = (
@@ -102,6 +104,38 @@ class TestValidator:
         with pytest.raises(DomainError) as exc:
             v.validate()
         assert exc.value.code == ErrorCode.VALIDATE_SKILL_DIR_INVALID
+
+
+class TestPublicationGate:
+    def test_missing_required_checks_is_not_publishable(self) -> None:
+        report = QualityReport(
+            run_id="test",
+            status=ReportStatus.PASS,
+            checks=[{"check_id": "frontmatter", "status": "pass"}],
+        )
+
+        result = evaluate_publication_quality(report)
+
+        assert result.publishable is False
+        assert "injection" in result.missing_check_ids
+
+    def test_not_run_required_check_is_not_publishable(self) -> None:
+        report = QualityReport(
+            run_id="test",
+            status=ReportStatus.PASS,
+            checks=[
+                {"check_id": "frontmatter", "status": "pass"},
+                {"check_id": "source-coverage", "status": "pass"},
+                {"check_id": "copyright", "status": "pass"},
+                {"check_id": "injection", "status": "not_run"},
+                {"check_id": "budget", "status": "pass"},
+            ],
+        )
+
+        result = evaluate_publication_quality(report)
+
+        assert result.publishable is False
+        assert result.not_run_check_ids == ("injection",)
 
 
 class TestQualityReportWriter:

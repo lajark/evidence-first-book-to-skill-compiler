@@ -21,6 +21,7 @@ the unit tests in ``tests/extractors/`` so behaviour stays consistent.
 from __future__ import annotations
 
 import io
+import os
 import shutil
 import subprocess
 import zipfile
@@ -288,6 +289,14 @@ def generate_samples(target_dir: Path) -> dict[str, dict[str, Any]]:
             encoding="utf-8",
         )
         try:
+            env = os.environ.copy()
+            calibre_temp = target_dir / "_calibre-temp"
+            calibre_temp.mkdir(exist_ok=True)
+            env["CALIBRE_CONFIG_DIRECTORY"] = str(
+                target_dir / "_calibre-config"
+            )
+            for variable in ("TMPDIR", "TEMP", "TMP"):
+                env[variable] = str(calibre_temp)
             subprocess.run(
                 [
                     "ebook-convert",
@@ -298,6 +307,7 @@ def generate_samples(target_dir: Path) -> dict[str, dict[str, Any]]:
                 ],
                 check=True,
                 capture_output=True,
+                env=env,
                 timeout=60,
             )
             samples["F"] = {

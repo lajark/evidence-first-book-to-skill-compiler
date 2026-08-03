@@ -1,6 +1,10 @@
 """Extractor package for Book2Skill."""
 
-from book2skill.extractors.base import Extractor, ExtractorCapabilities
+from book2skill.extractors.base import (
+    ExtractionResult,
+    Extractor,
+    ExtractorCapabilities,
+)
 from book2skill.extractors.docx_extractor import DocxExtractor
 from book2skill.extractors.epub_extractor import EpubExtractor
 from book2skill.extractors.html_extractor import HtmlExtractor
@@ -13,6 +17,7 @@ from book2skill.extractors.text_extractor import TextExtractor
 __all__ = [
     "Extractor",
     "ExtractorCapabilities",
+    "ExtractionResult",
     "ExtractorRegistry",
     "default_registry",
     "DocxExtractor",

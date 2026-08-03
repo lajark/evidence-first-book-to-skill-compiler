@@ -31,16 +31,11 @@ from book2skill.compiler.ir_builder import SkillIR, WorkflowStep
 from book2skill.compiler.token_budget import BudgetResult, TokenBudget, check_budget
 from book2skill.domain.errors import DomainError, ErrorCode
 from book2skill.domain.models import SourceManifest
+from book2skill.resources import template_file
 from book2skill.storage.file_storage import atomic_write
 
 #: Default budget for the main SKILL.md (PRD FR-04: 2,500–5,000 tokens).
 _DEFAULT_BUDGET = TokenBudget()
-
-#: Location of the Skill templates relative to this module.
-#: compiler/skill_writer.py -> book2skill/ -> src/ -> project root.
-_PROJECT_ROOT = Path(__file__).resolve().parents[2].parent
-_TEMPLATES_DIR = _PROJECT_ROOT / "templates" / "generated-skill"
-
 
 class SkillWriter:
     """Write a :class:`SkillIR` to a standard Skill directory.
@@ -58,7 +53,7 @@ class SkillWriter:
     ) -> None:
         self._output_dir = output_dir.resolve()
         self._budget = budget or _DEFAULT_BUDGET
-        self._templates_dir = (templates_dir or _TEMPLATES_DIR).resolve()
+        self._templates_dir = templates_dir.resolve() if templates_dir else None
 
     def write(
         self,
@@ -96,7 +91,8 @@ class SkillWriter:
 
         atomic_write(self._output_dir / "SKILL.md", skill_md)
 
-        for rel_path, content in references.items():
+        for rel_path in sorted(references):
+            content = references[rel_path]
             target = self._safe_target(rel_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(target, content)
@@ -105,7 +101,8 @@ class SkillWriter:
         (self._output_dir / "assets").mkdir(exist_ok=True)
 
         # Wiki layer derived views (P2): chapters/glossary/patterns/cheatsheet.
-        for rel_path, content in (wiki_files or {}).items():
+        for rel_path in sorted(wiki_files or {}):
+            content = (wiki_files or {})[rel_path]
             target = self._safe_target(rel_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(target, content)
@@ -124,14 +121,20 @@ class SkillWriter:
 
     def _render_skill_md(self, ir: SkillIR) -> str:
         """Render SKILL.md from the template, filled with IR content."""
-        template_text = (self._templates_dir / "SKILL.md").read_text(
-            encoding="utf-8"
-        )
+        template_text = self._read_template("SKILL.md")
         title = ir.name.replace("-", " ").title()
         content = template_text.replace("<skill-name>", ir.name)
+        # Serialize the free-form description as a YAML scalar. Bare values
+        # containing ``:`` (or other YAML syntax) would otherwise make the
+        # generated frontmatter invalid.
+        description_yaml = yaml.safe_dump(
+            {"description": ir.description},
+            sort_keys=False,
+            allow_unicode=True,
+        ).removeprefix("description: ").rstrip()
         content = content.replace(
             "<What this skill does, when to use it, and key boundary.>",
-            ir.description,
+            description_yaml,
         )
         content = content.replace("<Skill title>", title)
 
@@ -146,14 +149,42 @@ class SkillWriter:
         )
         content = content.replace(
             "- <input>",
-            "- A source document legally held by the user.",
+            self._render_list(
+                ir.required_inputs,
+                "- ",
+                default="- No additional input requirements.",
+            ),
         )
         content = content.replace(
             "1. <step>", self._render_workflow(ir.workflow)
         )
         content = content.replace(
             "- <output>",
-            "- A structured analysis bundle or compiled Skill; never raw book text.",
+            self._render_list(
+                ir.outputs,
+                "- ",
+                default="- No output contract was declared.",
+            ),
+        )
+        content = content.replace(
+            "- <condition>",
+            self._render_list(
+                ir.conditions,
+                "- ",
+                default="- No additional conditions.",
+            ),
+        )
+        content = content.replace(
+            "- <exception>",
+            self._render_list(
+                ir.exceptions,
+                "- ",
+                default="- No additional exceptions.",
+            ),
+        )
+        content = content.replace(
+            "- <example>",
+            self._render_examples(ir.examples),
         )
 
         # Append reference routing to the Evidence section when present.
@@ -197,7 +228,7 @@ class SkillWriter:
         }
         sources: list[dict[str, str]] = []
         if source_manifests:
-            for m in source_manifests:
+            for m in sorted(source_manifests, key=lambda manifest: manifest.source_id):
                 title = m.original_name or m.source_id
                 ingested = m.ingested_at.isoformat(timespec="seconds")
                 sources.append(
@@ -212,7 +243,7 @@ class SkillWriter:
                     }
                 )
         elif source_ids:
-            for sid in source_ids:
+            for sid in sorted(source_ids):
                 sources.append(
                     {
                         "source_id": sid,
@@ -229,14 +260,18 @@ class SkillWriter:
 
     def _render_quality_report(self, ir: SkillIR) -> str:
         """Render the quality-report.md stub (TASK-016 fills the checks)."""
-        template_text = (self._templates_dir / "quality-report.md").read_text(
-            encoding="utf-8"
-        )
+        template_text = self._read_template("quality-report.md")
         # The template is a stub with placeholder values; keep its structure
         # and inject the skill name as the run id.
         return template_text.replace("<run-id>", ir.name)
 
     # -- helpers ----------------------------------------------------------
+
+    def _read_template(self, name: str) -> str:
+        """Load an override template or the embedded package resource."""
+        if self._templates_dir is not None:
+            return (self._templates_dir / name).read_text(encoding="utf-8")
+        return template_file(name).read_text(encoding="utf-8")
 
     @staticmethod
     def _render_list(
@@ -250,6 +285,19 @@ class SkillWriter:
         if not items:
             return default or ""
         return "\n".join(f"{prefix}{item}" for item in items)
+
+    @staticmethod
+    def _render_examples(examples: list[dict[str, object]]) -> str:
+        """Render reviewed case units without exposing their source quotes."""
+        rendered: list[str] = []
+        for example in examples:
+            scenario = example.get("scenario")
+            unit_id = example.get("unit_id")
+            if not isinstance(scenario, str) or not scenario.strip():
+                continue
+            suffix = f" (case: {unit_id})" if isinstance(unit_id, str) else ""
+            rendered.append(f"- {scenario.strip()}{suffix}")
+        return "\n".join(rendered) or "- No reviewed case example is available."
 
     @staticmethod
     def _render_workflow(steps: list[WorkflowStep]) -> str:

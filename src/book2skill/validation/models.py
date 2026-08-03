@@ -15,8 +15,10 @@ Design notes
   :data:`~book2skill.domain.ErrorCode.VALIDATE_SKILL_DIR_INVALID`.
 - ``Finding.location`` follows the ``<file>:<line>`` or ``<file>#<anchor>``
   convention so the report stays machine-parseable.
-- ``published`` is always ``False`` here: validation is read-only and never
-  triggers :class:`~book2skill.application.publisher.Publisher`.
+- :class:`~book2skill.validation.quality_report.Validator` returns
+  ``published=False`` because validation is read-only. The publication
+  orchestrator may copy a passing report with ``published=True`` into the
+  staged tree that it commits.
 """
 
 from __future__ import annotations
@@ -143,8 +145,8 @@ class QualityReport(BaseModel):
 
     The ``checks`` array stores one object per :class:`CheckResult` with the
     keys ``check_id`` / ``status`` / ``message`` / ``evidence`` exactly as the
-    schema requires; ``published`` is always ``False`` because validation is
-    read-only.
+    schema requires. Validator-produced reports use ``published=False``;
+    publication may create an updated copy after all checks pass.
 
     ``use_enum_values`` is intentionally left at its default (``False``) so
     ``report.status`` stays a :class:`ReportStatus` member in memory; Pydantic

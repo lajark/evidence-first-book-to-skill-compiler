@@ -94,6 +94,22 @@ class TestRtfToText:
         text = rtf_to_text(raw)
         assert "‑" in text
 
+    def test_deep_ignored_group_does_not_leak_content(self) -> None:
+        """Deep ignored groups exercise the parser's constant-time skip state."""
+        depth = 2_000
+        raw = (
+            b"{\\rtf1\\ansi{\\*\\ignored "
+            + b"{" * depth
+            + b"secret metadata"
+            + b"}" * depth
+            + b"}Visible text.\\par}"
+        )
+
+        text = rtf_to_text(raw)
+
+        assert "secret metadata" not in text
+        assert "Visible text." in text
+
 
 class TestRtfExtractor:
     """Integration tests for the RtfExtractor adapter."""

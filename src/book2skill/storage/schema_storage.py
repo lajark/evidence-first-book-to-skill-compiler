@@ -51,6 +51,50 @@ class KnowledgeSchemaStorage(FileSchemaStorage):
             atomic_write(path, line + "\n")
         return path
 
+    def save_units_atomic(
+        self, collection_id: str, units: list[KnowledgeUnit]
+    ) -> Path:
+        """Atomically append a batch of knowledge-unit records.
+
+        The complete post-append JSONL content is assembled before the target
+        file is replaced. If serialisation or the atomic replacement fails,
+        the previously persisted history remains unchanged. An empty batch is
+        a no-op and does not create the collection directory or units file.
+        """
+        path = self._units_path(collection_id)
+        if not units:
+            return path
+
+        additions = "".join(f"{unit.model_dump_json()}\n" for unit in units)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, existing + additions)
+        return path
+
+    def save_new_units_atomic(
+        self, collection_id: str, units: list[KnowledgeUnit]
+    ) -> Path:
+        """Append only records not already present in append-only history.
+
+        Full Build may be repeated for an unchanged source collection. The
+        current view alone is insufficient for this test because a historical
+        record can still be the exact replayed Build result after a later
+        update. Comparing canonical Pydantic JSON avoids duplicate history
+        while leaving Update responsible for intentional supersessions.
+        """
+        existing = {unit.model_dump_json() for unit in self.load_units(collection_id)}
+        additions: list[KnowledgeUnit] = []
+        for unit in units:
+            encoded = unit.model_dump_json()
+            if encoded in existing:
+                continue
+            existing.add(encoded)
+            additions.append(unit)
+        return self.save_units_atomic(collection_id, additions)
+
     def load_units(self, collection_id: str) -> list[KnowledgeUnit]:
         """Load every knowledge-unit record for a collection.
 

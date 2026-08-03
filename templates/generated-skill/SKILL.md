@@ -17,8 +17,17 @@ description: <What this skill does, when to use it, and key boundary.>
 ## Workflow
 1. <step>
 
+## Conditions
+- <condition>
+
+## Exceptions and escalation
+- <exception>
+
 ## Output contract
 - <output>
+
+## Examples
+- <example>
 
 ## Evidence and limitations
 - Load `references/provenance.md` when source detail is needed.

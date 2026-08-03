@@ -305,7 +305,7 @@ Book2Skill **默认完全离线运行（Mock LLM）**，无需任何密钥即可
 
 ### 一次性配置（推荐）：`.env` 文件
 
-不希望每次命令都重复传 `--llm` / `--llm-api-key` / `--llm-base-url` / `--llm-model`？在项目根目录放一个 `.env` 文件，配置一次后所有 `analyze` / `batch` 命令自动生效。
+不希望每次命令都重复传 `--llm` / `--llm-base-url` / `--llm-model`？在项目根目录放一个 `.env` 文件，配置一次后所有 `analyze` / `batch` 命令自动生效。API Key 只能通过环境变量或 `.env` 提供，不接受命令行参数，以免泄漏到 shell 历史或进程列表。
 
 ```bash
 # 从模板复制（.env 已被 .gitignore 排除，不会提交）
@@ -318,11 +318,14 @@ cp .env.example .env
 | 变量 | 作用 | 示例 |
 |------|------|------|
 | `BOOK2SKILL_LLM` | 默认适配器，免去每次 `--llm`；取 `mock` / `openai` / `compatible` | `compatible` |
+| `BOOK2SKILL_LOCALE` | 人类可读 CLI/进度输出语言；`zh-CN`（默认）或 `en` | `en` |
 | `LLM_API_KEY` | API Key（云端真实 key；本地填 `local`） | `sk-...` |
 | `LLM_BASE_URL` | OpenAI 兼容端点（云端留空；其他供应商填地址） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `LLM_MODEL` | 模型名 | `qwen-plus` |
 
-> **查找规则**：从当前目录向上逐级查找 `.env`（在子目录运行命令也能找到项目根的 `.env`）。**优先级**：命令行参数 `--llm*` > 系统环境变量 > `.env` 文件 > 默认 Mock；其中 `LLM_*` 优先于 `OPENAI_*`。命令行参数可临时覆盖 `.env`，便于一次性切换（如 `--llm mock` 跑离线）。
+> **查找规则**：从当前目录向上逐级查找 `.env`（在子目录运行命令也能找到项目根的 `.env`）。**优先级**：非敏感命令行参数（`--llm` / `--llm-model` / `--llm-base-url`）> 系统环境变量 > `.env` 文件 > 默认 Mock；其中 `LLM_*` 优先于 `OPENAI_*`。API Key 仅从环境变量或 `.env` 读取。命令行参数可临时覆盖非敏感配置（如 `--llm mock` 跑离线）。
+
+人类可读的 CLI 和进度输出可用 `BOOK2SKILL_LOCALE=en` 或全局 `--locale en` 切换为英文；默认是 `zh-CN`。机器字段始终为英文，分析运行清单会记录有效 locale。
 
 #### 阿里云百炼（DashScope）示例
 
@@ -352,10 +355,7 @@ export LLM_API_KEY="sk-你的密钥"
 # PowerShell
 $env:LLM_API_KEY = "sk-你的密钥"
 
-# 方式 B：命令行参数
-book2skill analyze input/my-book.pdf --llm compatible --llm-api-key "sk-你的密钥"
-
-# 方式 C：写入 shell 配置文件永久生效（~/.bashrc 等）
+# 方式 B：写入 shell 配置文件永久生效（~/.bashrc 等）
 ```
 
 调用示例（`.env` 已配好时直接省略 `--llm*`；此处展示等价显式写法）：
@@ -367,14 +367,12 @@ book2skill analyze input/my-book.pdf --llm compatible
 # 阿里云百炼
 book2skill analyze input/my-book.pdf \
   --llm compatible \
-  --llm-api-key "sk-你的百炼key" \
   --llm-base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
   --llm-model qwen-plus
 
 # 本地模型（LM Studio / Ollama / vLLM，走 OpenAI 兼容接口）
 book2skill analyze input/my-book.pdf \
   --llm compatible \
-  --llm-api-key local \
   --llm-base-url http://localhost:11434/v1 \
   --llm-model qwen2.5:7b
 ```

@@ -55,12 +55,17 @@ def _spec(
     description: str = "A test skill that compiles knowledge into a usable form.",
     use_when: list[str] | None = None,
     do_not_use_when: list[str] | None = None,
+    required_inputs: list[str] | None = None,
+    outputs: list[str] | None = None,
 ) -> SkillSpec:
     return SkillSpec(
         name=name,
         description=description,
         use_when=use_when or ["You need to apply structured knowledge."],
         do_not_use_when=do_not_use_when or [],
+        required_inputs=required_inputs
+        or ["A verified brief with its intended audience."],
+        outputs=outputs or ["A checked implementation plan."],
     )
 
 
@@ -140,6 +145,45 @@ class TestIRBuilderBuild:
         assert "ku-1" in ir.knowledge_refs
         assert "ku-2" in ir.knowledge_refs
 
+    def test_contract_collects_domain_io_conditions_exceptions_and_cases(
+        self,
+    ) -> None:
+        units = [
+            _unit(
+                unit_id="pr-1",
+                content="Validate the request before deciding.",
+                conditions=["Only after rights are confirmed"],
+                exceptions=["Escalate ambiguous rights claims"],
+            ),
+            _unit(
+                unit_id="case-1",
+                kind=UnitKind.CASE,
+                content="A reviewed request produced a traceable response.",
+                conditions=["Only after rights are confirmed"],
+            ),
+        ]
+
+        ir = IRBuilder(
+            units,
+            _spec(
+                required_inputs=["A verified brief with its intended audience."],
+                outputs=["A checked implementation plan."],
+            ),
+        ).build()
+
+        assert ir.required_inputs == ["A verified brief with its intended audience."]
+        assert ir.outputs == ["A checked implementation plan."]
+        assert ir.conditions == ["Only after rights are confirmed"]
+        assert ir.exceptions == ["Escalate ambiguous rights claims"]
+        assert ir.examples == [
+            {
+                "unit_id": "case-1",
+                "scenario": "A reviewed request produced a traceable response.",
+                "conditions": ["Only after rights are confirmed"],
+                "exceptions": [],
+            }
+        ]
+
     def test_workflow_from_framework_and_principle(self) -> None:
         units = [
             _unit(
@@ -178,6 +222,18 @@ class TestIRBuilderBuild:
         assert "references/terms.md" in ir.references
         # frameworks don't get a reference file
         assert not any("framework" in r for r in ir.references)
+
+    def test_reference_routes_are_stable_when_input_kind_order_changes(self) -> None:
+        units = [
+            _unit(unit_id="tm-1", kind=UnitKind.TERM, content="A term."),
+            _unit(unit_id="tc-1", kind=UnitKind.TECHNIQUE, content="A technique."),
+        ]
+
+        forward = IRBuilder(units, _spec())
+        reverse = IRBuilder(list(reversed(units)), _spec())
+
+        assert forward.build().references == reverse.build().references
+        assert list(forward.build_references()) == list(reverse.build_references())
 
     def test_rejected_units_filtered(self) -> None:
         units = [
@@ -249,9 +305,12 @@ class TestIRBuilderReferences:
         assert "src-1" in refs["references/techniques.md"]
         assert "blk-1" in refs["references/techniques.md"]
 
-    def test_no_detail_kinds_returns_empty(self) -> None:
+    def test_all_units_get_a_provenance_reference(self) -> None:
         units = [_unit(unit_id="fw-1", kind=UnitKind.FRAMEWORK)]
-        assert IRBuilder(units, _spec()).build_references() == {}
+        refs = IRBuilder(units, _spec()).build_references()
+        assert set(refs) == {"references/provenance.md"}
+        assert "fw-1" in refs["references/provenance.md"]
+        assert "src-1 / blk-1" in refs["references/provenance.md"]
 
     def test_anti_pattern_filename(self) -> None:
         units = [

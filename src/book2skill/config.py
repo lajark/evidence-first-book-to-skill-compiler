@@ -24,8 +24,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
-__all__ = ["load_env_file"]
+Locale = Literal["zh-CN", "en"]
+
+__all__ = ["Locale", "load_env_file", "resolve_locale"]
 
 
 def _parse_line(line: str) -> tuple[str, str] | None:
@@ -86,3 +89,33 @@ def load_env_file(
         if parsed is not None:
             loaded[parsed[0]] = parsed[1]
     return loaded
+
+
+def resolve_locale(
+    locale: str | None = None,
+    *,
+    environment: dict[str, str] | None = None,
+    env_file: dict[str, str] | None = None,
+) -> Locale:
+    """Resolve the UI locale with CLI > environment > ``.env`` priority.
+
+    Only the stable ``zh-CN`` and ``en`` tags are emitted into audit data.
+    Common shell aliases are accepted as input to avoid platform-specific
+    locale spellings leaking into generated artifacts.
+    """
+    shell = environment if environment is not None else dict(os.environ)
+    value = locale or shell.get("BOOK2SKILL_LOCALE") or (env_file or {}).get(
+        "BOOK2SKILL_LOCALE"
+    )
+    normalized = (value or "zh-CN").replace("_", "-").lower()
+    aliases: dict[str, Locale] = {
+        "zh": "zh-CN",
+        "zh-cn": "zh-CN",
+        "en": "en",
+        "en-us": "en",
+        "en-gb": "en",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise ValueError("BOOK2SKILL_LOCALE must be one of: zh-CN, en") from exc

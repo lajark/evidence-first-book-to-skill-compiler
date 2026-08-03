@@ -56,7 +56,7 @@ class TestSourceCheck:
         assert result.status == CheckStatus.PASS
         assert result.evidence == []
 
-    def test_undeclared_source_warns(self, tmp_path: Path) -> None:
+    def test_undeclared_source_fails(self, tmp_path: Path) -> None:
         provenance = (
             "sources:\n  - source_id: src-1\n    content_sha256: abc\n"
         )
@@ -67,7 +67,7 @@ class TestSourceCheck:
         }
         _make_skill(tmp_path, provenance=provenance, references=references)
         result = SourceCheck().run(tmp_path)
-        assert result.status == CheckStatus.WARN
+        assert result.status == CheckStatus.FAIL
         assert "source.undeclared" in result.evidence
 
     def test_orphan_declared_source_warns(self, tmp_path: Path) -> None:
@@ -96,10 +96,19 @@ class TestSourceCheck:
         assert result.status == CheckStatus.FAIL
         assert "source.duplicate_id" in result.evidence
 
-    def test_missing_provenance_warns(self, tmp_path: Path) -> None:
+    def test_missing_provenance_warns_for_empty_skill(self, tmp_path: Path) -> None:
         _make_skill(tmp_path, provenance=None)
         result = SourceCheck().run(tmp_path)
         assert result.status == CheckStatus.WARN
+        assert "source.no_provenance" in result.evidence
+
+    def test_missing_provenance_with_knowledge_fails(self, tmp_path: Path) -> None:
+        skill_md = _VALID_FRONTMATTER + "# Skill\n\nApply this decision rule.\n"
+        _make_skill(tmp_path, skill_md=skill_md, provenance=None)
+
+        result = SourceCheck().run(tmp_path)
+
+        assert result.status == CheckStatus.FAIL
         assert "source.no_provenance" in result.evidence
 
     def test_empty_provenance_sources_passes(self, tmp_path: Path) -> None:
@@ -108,6 +117,42 @@ class TestSourceCheck:
         _make_skill(tmp_path, provenance=provenance)
         result = SourceCheck().run(tmp_path)
         assert result.status == CheckStatus.PASS
+
+    def test_empty_provenance_with_reference_content_fails(
+        self, tmp_path: Path
+    ) -> None:
+        _make_skill(
+            tmp_path,
+            provenance="sources: []\n",
+            references={
+                "techniques.md": "# Techniques\n\nApply this technique carefully.\n"
+            },
+        )
+
+        result = SourceCheck().run(tmp_path)
+
+        assert result.status == CheckStatus.FAIL
+        assert "source.empty_provenance" in result.evidence
+
+    def test_empty_provenance_with_citation_reports_undeclared_source(
+        self, tmp_path: Path
+    ) -> None:
+        _make_skill(
+            tmp_path,
+            provenance="sources: []\n",
+            references={
+                "techniques.md": (
+                    "# Techniques\n\nApply this technique.\n\n"
+                    "**Sources:**\n- src-1 / block-a\n"
+                )
+            },
+        )
+
+        result = SourceCheck().run(tmp_path)
+
+        assert result.status == CheckStatus.FAIL
+        assert "source.empty_provenance" in result.evidence
+        assert "source.undeclared" in result.evidence
 
     def test_missing_reference_link_warns(self, tmp_path: Path) -> None:
         skill_md = (

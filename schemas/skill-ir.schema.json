@@ -27,6 +27,7 @@
     },
     "usage": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "use_when",
         "do_not_use_when"
@@ -52,6 +53,30 @@
       "minItems": 1,
       "items": {
         "type": "object"
+      }
+    },
+    "required_inputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
       }
     },
     "knowledge_refs": {

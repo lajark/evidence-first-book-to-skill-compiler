@@ -5,9 +5,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from book2skill.application.analyze import AnalyzeUseCase
-from book2skill.application.models import AnalysisBundle
+from book2skill.application.models import AnalysisBundle, CandidateUnit
+from book2skill.domain import SourceFormat, TextBlock
+from book2skill.extractors.registry import ExtractorRegistry
+from book2skill.extractors.text_extractor import TextExtractor
 from book2skill.llm.mock_adapter import MockLLMAdapter
+from book2skill.storage import FileRawStorage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -115,6 +122,17 @@ class TestAnalyzeUseCase:
         assert len(bundle.candidate_units) >= 2
         assert len(bundle.structure) >= 2
         assert bundle.suggested_skills
+        assert bundle.analysis_run is not None
+        assert bundle.analysis_run.provider == "mock"
+        assert {event.operation for event in bundle.analysis_run.invocations} == {
+            "chunk",
+            "skills",
+        }
+        # Two extracted blocks are analysed in one bounded merged chunk instead
+        # of issuing separate structure and candidate calls for every block.
+        assert [event.operation for event in bundle.analysis_run.invocations].count(
+            "chunk"
+        ) == 1
 
     def test_analyze_returns_empty_on_no_inputs(self) -> None:
         use_case = AnalyzeUseCase()
@@ -228,6 +246,153 @@ class TestAnalyzeUseCase:
         result = use_case.execute([str(f)], rights_note="Personal copy")
         assert result.bundle is not None
 
+    def test_analyze_extracts_each_source_once(self, tmp_path: Path) -> None:
+        class CountingTextExtractor(TextExtractor):
+            calls = 0
+
+            def extract_text_blocks(self, path: Path) -> list[TextBlock]:
+                self.calls += 1
+                return super().extract_text_blocks(path)
+
+        source = _write_txt(
+            tmp_path / "book.txt",
+            "First paragraph.\n\nSecond paragraph.",
+        )
+        extractor = CountingTextExtractor()
+        registry = ExtractorRegistry()
+        registry.register(SourceFormat.TXT, extractor)
+
+        result = AnalyzeUseCase(registry=registry).execute([str(source)])
+
+        assert result.bundle is not None
+        assert extractor.calls == 1
+
+    def test_analyze_persists_original_and_trusted_extraction_map(
+        self, tmp_path: Path
+    ) -> None:
+        source = _write_txt(
+            tmp_path / "book.txt",
+            "First principle with enough detail.\n\n"
+            "Second technique with enough detail.",
+        )
+        data_home = tmp_path / "data"
+
+        result = AnalyzeUseCase(data_home=data_home).execute([str(source)])
+
+        assert result.bundle is not None
+        source_id = result.bundle.source_ids[0]
+        storage = FileRawStorage(data_home)
+        assert storage.load_original(source_id, 1) == source.read_bytes()
+        entries = storage.load_extraction_map(source_id, 1)
+        assert len(entries) == 2
+        trusted_ids = {entry.block_id for entry in entries}
+        candidate_ids = {
+            candidate.unit_id for candidate in result.bundle.candidate_units
+        }
+        referenced_ids = {
+            str(ref["block_id"])
+            for candidate in result.bundle.candidate_units
+            for ref in candidate.source_refs
+        }
+        assert len(candidate_ids) == 2
+        assert referenced_ids == trusted_ids
+
+    def test_analyze_can_skip_raw_persistence_for_dry_run(
+        self, tmp_path: Path
+    ) -> None:
+        source = _write_txt(
+            tmp_path / "book.txt",
+            "A principle with enough detail for analysis.",
+        )
+        data_home = tmp_path / "data"
+
+        result = AnalyzeUseCase(data_home=data_home).execute(
+            [str(source)], persist_raw=False
+        )
+
+        assert result.bundle is not None
+        source_id = result.bundle.source_ids[0]
+        assert not FileRawStorage(data_home).exists(source_id, 1)
+
+    def test_analyze_ids_are_stable_across_repeated_runs(self, tmp_path: Path) -> None:
+        source = _write_txt(
+            tmp_path / "book.txt",
+            "First principle with enough detail.\n\n"
+            "Second technique with enough detail.",
+        )
+        use_case = AnalyzeUseCase()
+
+        first = use_case.execute([str(source)])
+        second = use_case.execute([str(source)])
+
+        assert first.bundle is not None
+        assert second.bundle is not None
+        first_pairs = [
+            (candidate.unit_id, candidate.source_refs[0]["block_id"])
+            for candidate in first.bundle.candidate_units
+        ]
+        second_pairs = [
+            (candidate.unit_id, candidate.source_refs[0]["block_id"])
+            for candidate in second.bundle.candidate_units
+        ]
+        assert len({unit_id for unit_id, _block_id in first_pairs}) == 2
+        assert first_pairs == second_pairs
+
+    def test_analyze_replaces_untrusted_model_ids(self, tmp_path: Path) -> None:
+        class UntrustedIdsAdapter(MockLLMAdapter):
+            def analyze_structure(
+                self, source_id: str, blocks: list[TextBlock]
+            ) -> list[dict[str, object]]:
+                return [
+                    {
+                        "block_id": "model-invented-block",
+                        "locator": {"kind": "page", "page": 999},
+                        "heading": "Heading",
+                        "level": 1,
+                        "text_preview": "Heading",
+                    }
+                ]
+
+            def extract_candidates(
+                self, source_id: str, blocks: list[TextBlock]
+            ) -> list[dict[str, object]]:
+                return [
+                    {
+                        "unit_id": "model-invented-unit",
+                        "kind": "principle",
+                        "content": blocks[0].text,
+                        "source_refs": [
+                            {
+                                "source_id": "model-invented-source",
+                                "block_id": "model-invented-block",
+                            }
+                        ],
+                        "confidence": 0.8,
+                        "review_status": "candidate",
+                        "record_version": 99,
+                    }
+                ]
+
+        source = _write_txt(tmp_path / "book.txt", "# Trusted heading")
+
+        result = AnalyzeUseCase(llm=UntrustedIdsAdapter()).execute([str(source)])
+
+        assert result.bundle is not None
+        candidate = result.bundle.candidate_units[0]
+        structure = result.bundle.structure[0]
+        assert candidate.unit_id != "model-invented-unit"
+        assert candidate.record_version == 1
+        assert candidate.source_refs == [
+            {
+                "source_id": result.bundle.source_ids[0],
+                "block_id": structure.block_id,
+            }
+        ]
+        assert structure.block_id != "model-invented-block"
+        assert structure.locator["kind"] == "paragraph"
+        assert structure.locator["paragraph"] == 1
+        assert structure.locator["page"] is None
+
 
 # ---------------------------------------------------------------------------
 # AnalysisBundle model validation
@@ -307,3 +472,22 @@ class TestAnalysisBundleModel:
             Path("schemas/analysis-bundle.schema.json").read_text(encoding="utf-8")
         )
         validate(instance=data, schema=schema, cls=Draft202012Validator)
+
+    def test_bundle_rejects_duplicate_candidate_unit_ids(self) -> None:
+        candidate = CandidateUnit(
+            unit_id="cu-duplicate",
+            kind="technique",
+            content="A technique.",
+            source_refs=[{"source_id": "src1", "block_id": "src1-p1"}],
+            confidence=0.7,
+            review_status="candidate",
+        )
+
+        with pytest.raises(ValidationError, match="candidate unit_id"):
+            AnalysisBundle(
+                collection_id="col-test",
+                source_ids=["src1"],
+                structure=[],
+                candidate_units=[candidate, candidate],
+                review_queue=[],
+            )

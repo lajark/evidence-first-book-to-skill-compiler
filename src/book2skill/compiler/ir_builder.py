@@ -22,13 +22,13 @@ using ``jsonschema`` (a dev dependency, used in tests).
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from book2skill.domain.errors import DomainError, ErrorCode
 from book2skill.domain.knowledge import KnowledgeUnit, UnitKind
+from book2skill.resources import schema_file
 
 #: Name pattern shared by the Pydantic model and ``skill-ir.schema.json``.
 _SKILL_NAME_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
@@ -48,6 +48,17 @@ _REFERENCE_KINDS: frozenset[UnitKind] = frozenset(
         UnitKind.CHECKLIST,
         UnitKind.DECISION_RULE,
     }
+)
+
+# ``frozenset`` is useful for membership but its iteration order varies with
+# ``PYTHONHASHSEED``. Keep every rendered reference route in this fixed order.
+_REFERENCE_KIND_ORDER: tuple[UnitKind, ...] = (
+    UnitKind.TECHNIQUE,
+    UnitKind.CASE,
+    UnitKind.TERM,
+    UnitKind.ANTI_PATTERN,
+    UnitKind.CHECKLIST,
+    UnitKind.DECISION_RULE,
 )
 
 #: Mapping from kind to its plural slug used in reference file names.
@@ -110,6 +121,10 @@ class SkillIR(BaseModel):
     description: str = Field(..., min_length=10, max_length=1024)
     usage: SkillUsage
     workflow: list[WorkflowStep] = Field(..., min_length=1)
+    required_inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    conditions: list[str] = Field(default_factory=list)
+    exceptions: list[str] = Field(default_factory=list)
     knowledge_refs: list[str] = Field(default_factory=list)
     references: list[str] = Field(default_factory=list)
     assets: list[str] = Field(default_factory=list)
@@ -142,6 +157,16 @@ class SkillSpec(BaseModel):
     description: str = Field(..., min_length=10, max_length=1024)
     use_when: list[str] = Field(..., min_length=1)
     do_not_use_when: list[str] = Field(default_factory=list)
+    required_inputs: list[str] = Field(
+        default_factory=lambda: [
+            "A legally held source document or a verified analysis bundle."
+        ]
+    )
+    outputs: list[str] = Field(
+        default_factory=lambda: [
+            "A concise, source-traceable response or action plan; never raw book text."
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +236,21 @@ class IRBuilder:
                     do_not_use_when=self._spec.do_not_use_when,
                 ),
                 workflow=workflow,
+                required_inputs=self._spec.required_inputs,
+                outputs=self._spec.outputs,
+                conditions=self._unique_items(
+                    condition
+                    for unit in usable
+                    for condition in unit.conditions
+                ),
+                exceptions=self._unique_items(
+                    exception
+                    for unit in usable
+                    for exception in unit.exceptions
+                ),
                 knowledge_refs=knowledge_refs,
                 references=references,
+                examples=self._build_examples(usable),
             )
         except ValueError as exc:
             raise DomainError(
@@ -226,14 +264,20 @@ class IRBuilder:
         """Render the ``references/<kind>.md`` content for detail units.
 
         Returns a mapping of relative path (``references/techniques.md``) to
-        Markdown content. Only kinds with at least one unit produce a file.
-        Empty when all units are framework/principle.
+        Markdown content. Every usable unit is also listed in
+        ``references/provenance.md`` so framework/principle evidence remains
+        traceable even when it is rendered directly into ``SKILL.md``.
         """
         usable = self._usable_units()
         by_kind = self._group_by_kind(usable)
         result: dict[str, str] = {}
-        for kind, units in by_kind.items():
-            if kind not in _REFERENCE_KINDS:
+        if usable:
+            result["references/provenance.md"] = self._render_provenance_reference(
+                usable
+            )
+        for kind in _REFERENCE_KIND_ORDER:
+            units = by_kind.get(kind)
+            if units is None:
                 continue
             filename = self._reference_filename(kind)
             result[filename] = self._render_reference(kind, units)
@@ -248,6 +292,38 @@ class IRBuilder:
             for u in self._units
             if str(u.review_status) not in _EXCLUDED_STATUSES
         ]
+
+    @staticmethod
+    def _unique_items(items: Any) -> list[str]:
+        """Keep non-empty contract statements once, in first-seen order."""
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, str):
+                continue
+            normalized = item.strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                result.append(normalized)
+        return result
+
+    @staticmethod
+    def _build_examples(units: list[KnowledgeUnit]) -> list[dict[str, Any]]:
+        """Promote reviewed case units into concise, traceable examples."""
+        examples: list[dict[str, Any]] = []
+        for unit in units:
+            kind = UnitKind(unit.kind) if isinstance(unit.kind, str) else unit.kind
+            if kind != UnitKind.CASE:
+                continue
+            examples.append(
+                {
+                    "unit_id": unit.unit_id,
+                    "scenario": unit.content,
+                    "conditions": list(unit.conditions),
+                    "exceptions": list(unit.exceptions),
+                }
+            )
+        return examples
 
     @staticmethod
     def _group_by_kind(
@@ -307,7 +383,7 @@ class IRBuilder:
         grouped = self._group_by_kind(units)
         return [
             self._reference_filename(kind)
-            for kind in _REFERENCE_KINDS
+            for kind in _REFERENCE_KIND_ORDER
             if kind in grouped
         ]
 
@@ -348,17 +424,26 @@ class IRBuilder:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
+    @staticmethod
+    def _render_provenance_reference(units: list[KnowledgeUnit]) -> str:
+        """Render a compact unit-to-source ledger for every usable unit."""
+        lines = ["# Provenance", ""]
+        for unit in units:
+            lines.append(f"## {unit.unit_id}")
+            lines.append("")
+            lines.append("**Sources:**")
+            for ref in unit.source_refs:
+                lines.append(
+                    f"- {ref.source_id} / {ref.block_id}"
+                    + (f' — "{ref.quote}"' if ref.quote else "")
+                )
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
 
 # ---------------------------------------------------------------------------
 # JSON Schema validation (used in tests; jsonschema is a dev dependency)
 # ---------------------------------------------------------------------------
-
-
-def _schema_path() -> Path:
-    """Locate ``schemas/skill-ir.schema.json`` relative to this module."""
-    # compiler/ir_builder.py -> book2skill/ -> src/ -> project root.
-    project_root = Path(__file__).resolve().parents[2].parent
-    return project_root / "schemas" / "skill-ir.schema.json"
 
 
 def validate_skill_ir_against_schema(ir: SkillIR) -> None:
@@ -376,7 +461,7 @@ def validate_skill_ir_against_schema(ir: SkillIR) -> None:
             "installed; it is listed in the 'dev' optional dependency group."
         ) from exc
 
-    schema = json.loads(_schema_path().read_text(encoding="utf-8"))
+    schema = json.loads(schema_file("skill-ir.schema.json").read_text(encoding="utf-8"))
     jsonschema.validate(instance=ir.model_dump(mode="json"), schema=schema)
 
 

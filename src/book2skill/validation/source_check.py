@@ -12,12 +12,13 @@ in the format emitted by
 Findings:
 
 - Duplicate ``source_id`` in provenance.yml → ``fail``.
-- A cited ``source_id`` that is not declared in provenance.yml → ``warn``
+- A cited ``source_id`` that is not declared in provenance.yml → ``fail``
   (``source.undeclared``).
 - A declared ``source_id`` that is never cited anywhere → ``warn``
   (``source.orphan``).
-- Missing ``provenance.yml`` → ``warn`` (Build from Analysis mode produces a
-  stub; we do not block the build).
+- Missing or empty provenance for non-empty knowledge/reference content →
+  ``fail``. A missing ledger for an otherwise empty Skill skeleton remains a
+  ``warn`` because there is no source-bearing content to cover.
 - A ``references/<file>.md`` referenced from ``SKILL.md`` (e.g. in a routing
   line) that does not exist on disk → ``warn`` (``links.missing_reference``).
 
@@ -48,6 +49,12 @@ _SOURCE_CITATION_RE = re.compile(
 #: ``Detailed references: `references/techniques.md`, `references/terms.md```.
 _REFERENCE_FILE_RE = re.compile(r"`(references/[A-Za-z0-9_\-/]+\.md)`")
 
+#: YAML frontmatter at the start of SKILL.md. Source coverage concerns the
+#: rendered body, not descriptive metadata such as name and description.
+_FRONTMATTER_RE = re.compile(
+    r"\A---[ \t]*\r?\n.*?\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL
+)
+
 
 class SourceCheck(BaseCheck):
     """Check source coverage, orphans, duplicates and dangling reference links."""
@@ -58,30 +65,26 @@ class SourceCheck(BaseCheck):
         findings: list[Finding] = []
         provenance_path = skill_dir / "provenance.yml"
 
+        provenance_exists = provenance_path.exists()
         declared: list[str] = []
-        if not provenance_path.exists():
-            findings.append(
-                Finding(
-                    severity=CheckStatus.WARN,
-                    code="source.no_provenance",
-                    location="provenance.yml",
-                    message=(
-                        "provenance.yml not found; cannot verify source "
-                        "coverage. Build from Analysis mode produces a stub."
-                    ),
-                )
+        provenance_valid = True
+        if provenance_exists:
+            declared, provenance_valid = self._load_declared_sources(
+                provenance_path, findings
             )
-        else:
-            declared = self._load_declared_sources(provenance_path, findings)
 
         # Scan SKILL.md + references/*.md for citations and reference links.
         cited: set[str] = set()
         reference_files_on_disk: set[str] = set()
+        has_source_bearing_content = False
 
         skill_md = skill_dir / "SKILL.md"
         if skill_md.exists():
             skill_text = skill_md.read_text(encoding="utf-8")
             cited.update(self._extract_citations(skill_text))
+            has_source_bearing_content = self._has_substantive_markdown(
+                skill_text, strip_frontmatter=True
+            )
             self._check_reference_links(
                 skill_text, skill_dir, findings, reference_files_on_disk
             )
@@ -93,62 +96,94 @@ class SourceCheck(BaseCheck):
                 reference_files_on_disk.add(rel)
                 text = ref_file.read_text(encoding="utf-8")
                 cited.update(self._extract_citations(text))
-
-        # Coverage: cited but not declared -> undeclared warning.
-        if declared:
-            declared_set: set[str] = set()
-            seen: set[str] = set()
-            for sid in declared:
-                if sid in seen:
-                    findings.append(
-                        Finding(
-                            severity=CheckStatus.FAIL,
-                            code="source.duplicate_id",
-                            location="provenance.yml",
-                            message=(
-                                f"Duplicate source_id '{sid}' in provenance.yml."
-                            ),
-                        )
-                    )
-                else:
-                    seen.add(sid)
-                    declared_set.add(sid)
-
-            undeclared = cited - declared_set
-            for sid in sorted(undeclared):
-                findings.append(
-                    Finding(
-                        severity=CheckStatus.WARN,
-                        code="source.undeclared",
-                        location="SKILL.md/references",
-                        message=(
-                            f"Source '{sid}' is cited in content but not "
-                            "declared in provenance.yml."
-                        ),
-                    )
+                has_source_bearing_content = (
+                    has_source_bearing_content
+                    or self._has_substantive_markdown(text)
                 )
 
-            orphans = declared_set - cited
-            for sid in sorted(orphans):
+        # A ledger is mandatory once the Skill carries knowledge or source
+        # references. Empty skeletons retain the historical warning for a
+        # missing file, while a present-but-empty ledger is valid for them.
+        if not provenance_exists:
+            findings.append(
+                Finding(
+                    severity=(
+                        CheckStatus.FAIL
+                        if has_source_bearing_content or cited
+                        else CheckStatus.WARN
+                    ),
+                    code="source.no_provenance",
+                    location="provenance.yml",
+                    message=(
+                        "provenance.yml not found; source-bearing content "
+                        "cannot be verified."
+                    ),
+                )
+            )
+        elif provenance_valid and not declared and (
+            has_source_bearing_content or cited
+        ):
+            findings.append(
+                Finding(
+                    severity=CheckStatus.FAIL,
+                    code="source.empty_provenance",
+                    location="provenance.yml",
+                    message=(
+                        "provenance.yml declares no sources for non-empty "
+                        "knowledge or reference content."
+                    ),
+                )
+            )
+
+        declared_set: set[str] = set()
+        for sid in declared:
+            if sid in declared_set:
                 findings.append(
                     Finding(
-                        severity=CheckStatus.WARN,
-                        code="source.orphan",
+                        severity=CheckStatus.FAIL,
+                        code="source.duplicate_id",
                         location="provenance.yml",
                         message=(
-                            f"Source '{sid}' is declared but never cited in "
-                            "any content file."
+                            f"Duplicate source_id '{sid}' in provenance.yml."
                         ),
                     )
                 )
+            else:
+                declared_set.add(sid)
+
+        for sid in sorted(cited - declared_set):
+            findings.append(
+                Finding(
+                    severity=CheckStatus.FAIL,
+                    code="source.undeclared",
+                    location="SKILL.md/references",
+                    message=(
+                        f"Source '{sid}' is cited in content but not "
+                        "declared in provenance.yml."
+                    ),
+                )
+            )
+
+        for sid in sorted(declared_set - cited):
+            findings.append(
+                Finding(
+                    severity=CheckStatus.WARN,
+                    code="source.orphan",
+                    location="provenance.yml",
+                    message=(
+                        f"Source '{sid}' is declared but never cited in "
+                        "any content file."
+                    ),
+                )
+            )
 
         return findings
 
     @staticmethod
     def _load_declared_sources(
         provenance_path: Path, findings: list[Finding]
-    ) -> list[str]:
-        """Parse provenance.yml and return the list of declared source_ids."""
+    ) -> tuple[list[str], bool]:
+        """Return declared source IDs and whether the ledger structure is valid."""
         try:
             data = yaml.safe_load(provenance_path.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as exc:
@@ -160,7 +195,7 @@ class SourceCheck(BaseCheck):
                     message=f"provenance.yml is not valid YAML: {exc}",
                 )
             )
-            return []
+            return [], False
 
         if not isinstance(data, dict):
             findings.append(
@@ -171,7 +206,7 @@ class SourceCheck(BaseCheck):
                     message="provenance.yml top level must be a YAML mapping.",
                 )
             )
-            return []
+            return [], False
 
         sources = data.get("sources") or []
         if not isinstance(sources, list):
@@ -183,7 +218,7 @@ class SourceCheck(BaseCheck):
                     message="provenance.yml 'sources' must be a list.",
                 )
             )
-            return []
+            return [], False
 
         declared: list[str] = []
         for entry in sources:
@@ -191,12 +226,29 @@ class SourceCheck(BaseCheck):
                 sid = entry["source_id"]
                 if isinstance(sid, str):
                     declared.append(sid)
-        return declared
+        return declared, True
 
     @staticmethod
     def _extract_citations(text: str) -> set[str]:
         """Return the set of source_ids cited in *text*."""
         return {m.group("source_id") for m in _SOURCE_CITATION_RE.finditer(text)}
+
+    @staticmethod
+    def _has_substantive_markdown(
+        text: str, *, strip_frontmatter: bool = False
+    ) -> bool:
+        """Return whether Markdown contains content beyond structural headings."""
+        content = _FRONTMATTER_RE.sub("", text, count=1) if strip_frontmatter else text
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line in {"---", "***", "___"}:
+                continue
+            if line.startswith("<!--") and line.endswith("-->"):
+                continue
+            return True
+        return False
 
     @staticmethod
     def _check_reference_links(

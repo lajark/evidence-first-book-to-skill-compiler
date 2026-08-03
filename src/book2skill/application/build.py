@@ -28,8 +28,8 @@ Design notes
 - ``provenance.yml`` is enriched with real ``content_sha256`` /
   ``original_name`` from :class:`~book2skill.domain.SourceManifest` records
   when the wrapped Analyze pipeline persisted them to RawStorage (Full Build
-  with ``data_home``). Build from Analysis has no manifests, so its
-  provenance falls back to ``unknown`` metadata.
+  with ``data_home``). Build from Analysis is an external trust boundary and
+  therefore requires the matching RawStorage; unverified bundles fail closed.
 - The use case does NOT publish or install the produced Skill; that is the
   responsibility of M4 (publisher) and M5 (hosts).
 """
@@ -38,12 +38,21 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
+import shutil
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from book2skill.application.analyze import AnalyzeUseCase
+from book2skill.application.artifacts import (
+    CompilationArtifact,
+    verify_compilation_artifact,
+    write_compilation_artifact,
+)
+from book2skill.application.bundle_trace import verify_bundle_against_raw
 from book2skill.application.candidates import candidate_to_unit
 from book2skill.application.gate import GateError
 from book2skill.application.models import AnalysisBundle
@@ -59,12 +68,17 @@ from book2skill.compiler.wiki_generator import WikiGenerator
 from book2skill.domain import (
     DomainError,
     ErrorCode,
-    KnowledgeUnit,
     PublishStatus,
     SourceManifest,
 )
+from book2skill.llm.runtime import LLMRuntimeConfig
 from book2skill.storage import FileRawStorage, RawStorage, atomic_write
 from book2skill.storage.schema_storage import KnowledgeSchemaStorage
+from book2skill.validation import (
+    QualityReportWriter,
+    Validator,
+    evaluate_publication_quality,
+)
 
 #: Default output root when the caller does not pass ``output_dir``. Relative
 #: to the process cwd; CLI overrides this with ``--output-dir``.
@@ -91,6 +105,8 @@ class BuildResult:
     collection_id: str | None = None
     source_manifests: list[SourceManifest] = field(default_factory=list)
     errors: list[GateError] = field(default_factory=list)
+    artifact: CompilationArtifact | None = None
+    publication_ready: bool = False
 
 
 class BuildUseCase:
@@ -100,7 +116,8 @@ class BuildUseCase:
     construct a fresh :class:`AnalyzeUseCase` and a
     :class:`KnowledgeSchemaStorage` rooted at *data_home*; without
     *data_home* the Analyze stage runs in-memory and Schema persistence is
-    skipped (only the Skill directory is produced, with stub provenance).
+    skipped for Full Build. Build from Analysis requires RawStorage so its
+    externally supplied references can be verified before persistence.
     """
 
     def __init__(
@@ -111,9 +128,12 @@ class BuildUseCase:
         raw_storage: RawStorage | None = None,
         writer: SkillWriter | None = None,
         data_home: Path | None = None,
+        runtime_config: LLMRuntimeConfig | None = None,
     ) -> None:
         self._data_home = data_home.resolve() if data_home else None
-        self._analyze = analyze_use_case or AnalyzeUseCase(data_home=data_home)
+        self._analyze = analyze_use_case or AnalyzeUseCase(
+            data_home=data_home, runtime_config=runtime_config
+        )
         self._schema_storage = schema_storage or (
             KnowledgeSchemaStorage(self._data_home) if self._data_home else None
         )
@@ -165,7 +185,21 @@ class BuildUseCase:
             return BuildResult(errors=analyze_result.errors)
 
         bundle = analyze_result.bundle
-        manifests = self._collect_manifests(bundle.source_ids)
+        # Full Build is not exempt from the artifact trust boundary: an
+        # adapter result can still contain an invented source or block ID.
+        # When no data_home is used, reuse Analyze's in-memory Raw store
+        # instead of verifying against a new empty store.
+        verified_manifests = verify_bundle_against_raw(
+            bundle,
+            self._raw_storage or self._analyze.raw_storage,
+            source_version=_DEFAULT_SOURCE_VERSION,
+            input_id=bundle.collection_id,
+        )
+        # In-memory Full Build still verifies the live Analyze result, but it
+        # cannot produce a replayable publication artifact after this process
+        # exits. Keep that convenience path as an explicitly non-publishable
+        # draft by omitting transient manifests from the rendered ledger.
+        manifests = verified_manifests if self._data_home is not None else []
 
         reporter(STAGE_COMPILE, 0, 1, spec.name)
         result = self._compile_bundle(
@@ -201,7 +235,9 @@ class BuildUseCase:
         Raises:
             DomainError: With :data:`ErrorCode.BUILD_INPUT_INVALID` when the
                 file is missing, not valid JSON, or the bundle has no
-                candidate units / no source_ids.
+                candidate units / no source_ids; or with
+                :data:`ErrorCode.BUILD_SOURCE_TRACE_INVALID` when its source
+                references cannot be verified against matching Raw records.
         """
         reporter = on_progress or noop_progress
         if not bundle_path.exists():
@@ -241,14 +277,19 @@ class BuildUseCase:
                 ),
             )
 
-        # Build from Analysis has no RawStorage handle; manifests stay empty
-        # and provenance falls back to ``unknown`` metadata.
+        manifests = verify_bundle_against_raw(
+            bundle,
+            self._raw_storage,
+            source_version=_DEFAULT_SOURCE_VERSION,
+            input_id=str(bundle_path),
+        )
+
         reporter(STAGE_COMPILE, 0, 1, spec.name)
         result = self._compile_bundle(
             bundle=bundle,
             spec=spec,
             output_dir=output_dir,
-            source_manifests=[],
+            source_manifests=manifests,
             errors=[],
         )
         reporter(STAGE_COMPILE, 1, 1, spec.name)
@@ -268,32 +309,127 @@ class BuildUseCase:
         errors: list[GateError],
     ) -> BuildResult:
         """Persist units, build IR, write Skill directory."""
-        units = self._persist_units(bundle)
+        units = [candidate_to_unit(candidate) for candidate in bundle.candidate_units]
         builder = IRBuilder(units, spec)
         ir = builder.build()
         references = builder.build_references()
         wiki_files = WikiGenerator(units, skill_name=spec.name).build()
 
-        target_dir = output_dir or (Path.cwd() / _DEFAULT_OUTPUT_ROOT / spec.name)
-        # Honour an injected writer only when the caller did not pass an
-        # explicit output_dir; explicit output_dir always wins so the CLI
-        # ``--output-dir`` flag is deterministic.
-        writer = (
-            SkillWriter(output_dir=output_dir)
-            if output_dir is not None
-            else self._writer or SkillWriter(output_dir=target_dir)
-        )
+        target_dir = (
+            output_dir or (Path.cwd() / _DEFAULT_OUTPUT_ROOT / spec.name)
+        ).resolve()
+        # An injected writer is retained as a hermetic test seam. Normal
+        # production builds compile into a sibling staging directory and only
+        # expose it after validation and metadata writing have succeeded.
+        direct_writer = output_dir is None and self._writer is not None
+        staging_dir: Path | None = None
+        backup_dir: Path | None = None
+        swapped = False
+        if direct_writer:
+            writer = self._writer
+            assert writer is not None
+        else:
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            staging_dir = target_dir.parent / (
+                f".{target_dir.name}.staging-{uuid.uuid4().hex}"
+            )
+            writer = SkillWriter(output_dir=staging_dir)
 
-        skill_dir = writer.write(
-            ir,
-            references=references,
-            source_manifests=source_manifests or None,
-            wiki_files=wiki_files,
-        )
+        try:
+            skill_dir = writer.write(
+                ir,
+                references=references,
+                source_manifests=source_manifests or None,
+                wiki_files=wiki_files,
+            )
+        except Exception:
+            if staging_dir is not None and staging_dir.exists():
+                self._remove_tree(staging_dir)
+            raise
 
-        # Persist per-skill metadata so Update (TASK-015) can reload the
-        # authored shape and locate the Schema collection without re-asking.
-        self._write_skill_meta(skill_dir, spec, bundle.collection_id)
+        try:
+            # Replace SkillWriter's placeholder with the real report for every
+            # Build, including drafts. A draft may legitimately be below the
+            # publication bar, but the report must expose that fact to
+            # reviewers.
+            report = Validator(skill_dir).validate()
+            if staging_dir is not None:
+                report = report.model_copy(
+                    update={"run_id": f"{target_dir.name}-{report.run_id}"}
+                )
+            QualityReportWriter(skill_dir).write(report)
+            publication_ready = evaluate_publication_quality(report).publishable
+
+            # Persist per-skill metadata before exposing a staged tree.
+            self._write_skill_meta(skill_dir, spec, bundle.collection_id)
+            if bundle.analysis_run is not None:
+                atomic_write(
+                    skill_dir / "analysis-run.json",
+                    bundle.analysis_run.model_dump_json(indent=2),
+                )
+            artifact = write_compilation_artifact(
+                skill_dir,
+                collection_id=bundle.collection_id,
+                spec=spec,
+                units=units,
+                source_manifests=source_manifests,
+            )
+            if not verify_compilation_artifact(skill_dir, artifact, units=units):
+                raise DomainError(
+                    code=ErrorCode.SCHEMA_VALIDATION_FAILED,
+                    input_id=bundle.collection_id,
+                    message="The staged compilation artifact is inconsistent.",
+                    recovery="Rebuild the Skill and retry.",
+                )
+
+            if staging_dir is not None:
+                backup_dir = self._swap_draft_tree(staging_dir, target_dir)
+                skill_dir = target_dir
+                swapped = True
+
+            # Schema history is committed only after compilation, validation
+            # and metadata have succeeded. Unchanged rebuilds do not append
+            # duplicate records to the append-only history.
+            if self._schema_storage is not None:
+                self._schema_storage.save_new_units_atomic(
+                    bundle.collection_id, units
+                )
+        except Exception as exc:
+            if swapped:
+                restored = (
+                    self._restore_draft_tree(target_dir, backup_dir)
+                    if backup_dir is not None
+                    else self._remove_new_draft(target_dir)
+                )
+                if not restored:
+                    raise DomainError(
+                        code=ErrorCode.PUBLISH_ROLLBACK_FAILED,
+                        input_id=str(target_dir),
+                        message=(
+                            "Build failed and the previous draft could not "
+                            "be restored."
+                        ),
+                        recovery=(
+                            "Inspect the staging/backup directories before "
+                            "retrying the build."
+                        ),
+                    ) from exc
+                raise DomainError(
+                    code=ErrorCode.SCHEMA_VALIDATION_FAILED,
+                    input_id=bundle.collection_id,
+                    message=(
+                        "Build Schema commit failed; the previous draft "
+                        "was restored."
+                    ),
+                    recovery="Resolve the Schema storage error and retry the build.",
+                    details={"storage_error": type(exc).__name__},
+                ) from exc
+            raise
+        finally:
+            if staging_dir is not None and staging_dir.exists():
+                self._remove_tree(staging_dir)
+        if backup_dir is not None and backup_dir.exists():
+            self._remove_tree(backup_dir)
 
         return BuildResult(
             skill_dir=skill_dir,
@@ -301,24 +437,60 @@ class BuildUseCase:
             collection_id=bundle.collection_id,
             source_manifests=source_manifests,
             errors=errors,
+            artifact=artifact,
+            publication_ready=publication_ready,
         )
+
+    @staticmethod
+    def _swap_draft_tree(staging_dir: Path, target_dir: Path) -> Path | None:
+        """Atomically replace a draft directory and return its backup."""
+        backup_dir: Path | None = None
+        if target_dir.exists():
+            backup_dir = target_dir.parent / (
+                f".{target_dir.name}.previous-{uuid.uuid4().hex}"
+            )
+            os.replace(target_dir, backup_dir)
+        try:
+            os.replace(staging_dir, target_dir)
+        except Exception:
+            if backup_dir is not None and backup_dir.exists():
+                os.replace(backup_dir, target_dir)
+            raise
+        return backup_dir
+
+    @classmethod
+    def _restore_draft_tree(
+        cls, target_dir: Path, backup_dir: Path
+    ) -> bool:
+        """Restore a prior draft after a post-swap failure."""
+        try:
+            if target_dir.exists():
+                cls._remove_tree(target_dir)
+            os.replace(backup_dir, target_dir)
+        except OSError:
+            return False
+        return target_dir.exists() and not backup_dir.exists()
+
+    @classmethod
+    def _remove_new_draft(cls, target_dir: Path) -> bool:
+        """Remove a first-build tree after a post-swap commit failure."""
+        try:
+            if target_dir.exists():
+                cls._remove_tree(target_dir)
+        except OSError:
+            return False
+        return not target_dir.exists()
+
+    @staticmethod
+    def _remove_tree(path: Path) -> None:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.exists():
+            path.unlink()
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _persist_units(self, bundle: AnalysisBundle) -> list[KnowledgeUnit]:
-        """Convert candidates to KnowledgeUnits and persist them.
-
-        When Schema storage is configured (``data_home`` provided), units are
-        appended to ``units.jsonl`` so the build is auditable. Without
-        storage the units are returned in-memory only.
-        """
-        units = [candidate_to_unit(c) for c in bundle.candidate_units]
-        if self._schema_storage is not None:
-            for u in units:
-                self._schema_storage.save_unit(bundle.collection_id, u)
-        return units
 
     def _write_skill_meta(
         self, skill_dir: Path, spec: SkillSpec, collection_id: str

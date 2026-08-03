@@ -7,7 +7,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from book2skill.application.analyze import AnalyzeUseCase
 from book2skill.application.batch import BatchOrchestrator
+from book2skill.application.gate import Gate
 from book2skill.application.models import (
     BatchResult,
     BatchSummary,
@@ -160,6 +162,29 @@ class TestBatchOrchestrator:
         # Gate keeps the first file per content hash; no error is raised.
         assert result.summary.total == 1
         assert result.summary.succeeded == 1
+
+    def test_batch_reuses_discovered_file_without_rehashing(
+        self, tmp_path: Path
+    ) -> None:
+        class CountingGate(Gate):
+            def __init__(self) -> None:
+                super().__init__()
+                self.hash_calls = 0
+
+            def _compute_sha256(self, path: Path) -> str:
+                self.hash_calls += 1
+                return super()._compute_sha256(path)
+
+        source = _write_txt(tmp_path / "a.txt", "# Heading\nContent.")
+        gate = CountingGate()
+        use_case = AnalyzeUseCase(gate=gate)
+
+        result = BatchOrchestrator(gate=gate, use_case=use_case).execute(
+            [str(source)]
+        )
+
+        assert result.summary.succeeded == 1
+        assert gate.hash_calls == 1
 
     def test_batch_progress_callback(self, tmp_path: Path) -> None:
         """The progress callback fires once per discovered file."""

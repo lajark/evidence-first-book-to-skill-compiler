@@ -1,3 +1,6 @@
+# Reproducible core/dev test environment for the CI ``core`` matrix.
+# Keep this file exact-pinned; optional extras are tested in their own
+# compatibility matrix because each backend has different platform support.
 annotated-doc==0.0.4
 annotated-types==0.8.0
 attrs==26.1.0

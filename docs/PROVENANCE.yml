@@ -35,8 +35,9 @@ components:
           Added provenance header; adjusted import to use the vendored
           `exceptions` module within this package; removed the
           `extract_docx` orchestrator and its `print` debug logging (backend
-          selection is handled by the DocxExtractor wrapper); no other
-          functional changes to extraction or validation logic.
+          selection is handled by the DocxExtractor wrapper); safety scan
+          uses one encoding choice per XML member and enforces XML member /
+          aggregate decompression budgets before reading content.
       - original_path: book_to_skill/parsers/pdf.py
         local_path: src/book2skill/extractors/_vendor/book_to_skill/pdf.py
         modifications: Added provenance header; no functional changes.

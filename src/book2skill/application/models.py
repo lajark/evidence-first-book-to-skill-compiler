@@ -10,13 +10,14 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ConflictRecord and ReviewItem are the canonical domain models re-exported
 # here so the AnalysisBundle composes the single source of truth. The domain
 # versions are strict supersets (extra optional fields) of the former M1
 # definitions; the analysis-bundle schema is permissive for these array items.
 from book2skill.domain.knowledge import ConflictRecord, ReviewItem
+from book2skill.llm.runtime import AnalysisRunManifest
 
 
 class StructureEntry(BaseModel):
@@ -74,6 +75,16 @@ class AnalysisBundle(BaseModel):
     review_queue: list[ReviewItem]
     conflicts: list[ConflictRecord] = Field(default_factory=list)
     suggested_skills: list[SuggestedSkill] = Field(default_factory=list)
+    analysis_run: AnalysisRunManifest | None = None
+
+    @model_validator(mode="after")
+    def _validate_unique_ids(self) -> AnalysisBundle:
+        if len(self.source_ids) != len(set(self.source_ids)):
+            raise ValueError("source_ids must be unique")
+        unit_ids = [candidate.unit_id for candidate in self.candidate_units]
+        if len(unit_ids) != len(set(unit_ids)):
+            raise ValueError("candidate unit_id values must be unique")
+        return self
 
 
 # ---------------------------------------------------------------------------

@@ -218,13 +218,21 @@ def detect_conflicts(units: list[KnowledgeUnit]) -> list[ConflictRecord]:
     Every conflict is emitted with ``status="open"``; resolution is a human
     decision (PRD: "冲突观点并列，不自动裁决").
     """
+    token_sets = [_tokenize(unit.content) for unit in units]
+    lower_contents = [unit.content.lower() for unit in units]
+    candidate_pairs = _conflict_candidate_pairs(units, token_sets, lower_contents)
+
     conflicts: list[ConflictRecord] = []
-    for a in range(len(units)):
-        for b in range(a + 1, len(units)):
-            ua, ub = units[a], units[b]
-            if _is_principle_anti_pattern_tension(ua, ub) or _is_negation_pair(
-                ua, ub
-            ):
+    for a, b in sorted(candidate_pairs):
+        ua, ub = units[a], units[b]
+        if _is_conflict_pair(
+            ua,
+            ub,
+            token_sets[a],
+            token_sets[b],
+            lower_contents[a],
+            lower_contents[b],
+        ):
                 conflicts.append(
                     ConflictRecord(
                         conflict_id=f"conflict-{len(conflicts)}",
@@ -240,14 +248,78 @@ def detect_conflicts(units: list[KnowledgeUnit]) -> list[ConflictRecord]:
     return conflicts
 
 
+def _conflict_candidate_pairs(
+    units: list[KnowledgeUnit],
+    token_sets: list[set[str]],
+    lower_contents: list[str],
+) -> set[tuple[int, int]]:
+    """Return only potentially conflicting pairs through a token inverted index."""
+    by_token: dict[str, dict[str, list[int]]] = {}
+    for index, (unit, tokens, content) in enumerate(
+        zip(units, token_sets, lower_contents, strict=True)
+    ):
+        if unit.kind not in {UnitKind.PRINCIPLE, UnitKind.ANTI_PATTERN}:
+            continue
+        bucket = "anti" if unit.kind == UnitKind.ANTI_PATTERN else "principle"
+        if bucket == "principle" and any(
+            marker in content for marker in _NEGATION_MARKERS
+        ):
+            bucket = "negated_principle"
+        for token in tokens:
+            by_token.setdefault(token, {}).setdefault(bucket, []).append(index)
+
+    pairs: set[tuple[int, int]] = set()
+    for buckets in by_token.values():
+        principles = buckets.get("principle", []) + buckets.get(
+            "negated_principle", []
+        )
+        for principle in principles:
+            for anti_pattern in buckets.get("anti", []):
+                pairs.add(_ordered_pair(principle, anti_pattern))
+        for negated in buckets.get("negated_principle", []):
+            for principle in principles:
+                if negated != principle:
+                    pairs.add(_ordered_pair(negated, principle))
+    return pairs
+
+
+def _ordered_pair(first: int, second: int) -> tuple[int, int]:
+    """Return a stable pair key without widening tuple type information."""
+    return (first, second) if first < second else (second, first)
+
+
+def _is_conflict_pair(
+    a: KnowledgeUnit,
+    b: KnowledgeUnit,
+    tokens_a: set[str],
+    tokens_b: set[str],
+    content_a: str,
+    content_b: str,
+) -> bool:
+    kinds = {a.kind, b.kind}
+    if {UnitKind.PRINCIPLE, UnitKind.ANTI_PATTERN} == kinds:
+        return _jaccard(tokens_a, tokens_b) >= 0.34
+    if a.kind != UnitKind.PRINCIPLE or b.kind != UnitKind.PRINCIPLE:
+        return False
+    if tokens_a == tokens_b or not (tokens_a & tokens_b):
+        return False
+    return any(marker in content_a for marker in _NEGATION_MARKERS) or any(
+        marker in content_b for marker in _NEGATION_MARKERS
+    )
+
+
 def _is_principle_anti_pattern_tension(
     a: KnowledgeUnit, b: KnowledgeUnit
 ) -> bool:
     """True when a principle and an anti_pattern discuss the same topic."""
-    kinds = {a.kind, b.kind}
-    if {UnitKind.PRINCIPLE, UnitKind.ANTI_PATTERN} != kinds:
-        return False
-    return _jaccard(_tokenize(a.content), _tokenize(b.content)) >= 0.34
+    return _is_conflict_pair(
+        a,
+        b,
+        _tokenize(a.content),
+        _tokenize(b.content),
+        a.content.lower(),
+        b.content.lower(),
+    )
 
 
 def _is_negation_pair(a: KnowledgeUnit, b: KnowledgeUnit) -> bool:
@@ -257,15 +329,13 @@ def _is_negation_pair(a: KnowledgeUnit, b: KnowledgeUnit) -> bool:
     their token sets must overlap (same topic) yet not be identical
     (genuinely divergent wording).
     """
-    if a.kind != UnitKind.PRINCIPLE or b.kind != UnitKind.PRINCIPLE:
-        return False
-    ta, tb = _tokenize(a.content), _tokenize(b.content)
-    if ta == tb:
-        return False
-    if not (ta & tb):
-        return False
-    return any(m in a.content.lower() for m in _NEGATION_MARKERS) or any(
-        m in b.content.lower() for m in _NEGATION_MARKERS
+    return _is_conflict_pair(
+        a,
+        b,
+        _tokenize(a.content),
+        _tokenize(b.content),
+        a.content.lower(),
+        b.content.lower(),
     )
 
 

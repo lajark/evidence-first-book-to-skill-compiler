@@ -12,6 +12,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from book2skill.sdk.registrar import ExtensionRegistrar
+
 _DEFAULT_PERMISSIONS: frozenset[str] = frozenset(
     {"read_normalized_sources", "write_extension_data"}
 )
@@ -29,6 +31,7 @@ class ExtensionContext:
         config: Read-only configuration view (from ``config.example.yaml`` style keys).
         permissions: Permissions the extension is allowed to exercise.
         dependencies: IDs of other extensions this one depends on (resolved).
+        registrar: Core-owned typed registrar for declared runtime contributions.
         log: Logger namespaced to the extension.
     """
 
@@ -39,6 +42,7 @@ class ExtensionContext:
     config: dict[str, object] = field(default_factory=dict)
     permissions: frozenset[str] = _DEFAULT_PERMISSIONS
     dependencies: frozenset[str] = frozenset()
+    registrar: ExtensionRegistrar | None = None
     log: logging.Logger = field(default_factory=lambda: logging.getLogger("book2skill"))
 
     @property

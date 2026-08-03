@@ -12,7 +12,9 @@
 #   - Replaced the upstream ``book_to_skill.config.OUTPUT_DIR`` dependency with
 #     a per-call tempfile, so the function is self-contained and does not
 #     require a project-level output directory.
-#   - No other functional changes to the ebook-convert invocation.
+#   - Isolated Calibre's configuration under the per-call temporary directory
+#     and forced its subprocess scratch files into the same writable tree.
+#   - Made subprocess output decoding deterministic on non-UTF-8 hosts.
 
 """MOBI/AZW text extraction via the Calibre ``ebook-convert`` CLI."""
 
@@ -35,10 +37,22 @@ def extract_with_ebook_convert(input_path: str) -> str | None:
     output_path = tmp_dir / "ebook-convert-output.txt"
     try:
         input_path = os.path.abspath(input_path)
+        env = os.environ.copy()
+        env["CALIBRE_CONFIG_DIRECTORY"] = str(tmp_dir / "calibre-config")
+        calibre_temp = tmp_dir / "calibre-temp"
+        calibre_temp.mkdir()
+        # Calibre creates its own nested temporary workspace. Explicitly route
+        # all common tempfile variables so a restricted host cannot send that
+        # child process back to an unwritable system-wide Temp directory.
+        for variable in ("TMPDIR", "TEMP", "TMP"):
+            env[variable] = str(calibre_temp)
         result = subprocess.run(
             ["ebook-convert", input_path, str(output_path)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
             timeout=300,
         )
         if result.returncode == 0 and output_path.exists():

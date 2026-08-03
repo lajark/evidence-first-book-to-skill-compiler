@@ -28,6 +28,7 @@ from book2skill.sdk.models import (
     ExtractorCapabilities,
     KnowledgeCluster,
     KnowledgeRef,
+    KnowledgeStatus,
     KnowledgeUnit,
     Locator,
     LocatorKind,
@@ -46,6 +47,11 @@ from book2skill.sdk.models import (
     WikiStorage,
     WorkflowStep,
 )
+from book2skill.sdk.registrar import (
+    ContributionRegistrationError,
+    ExtensionContributionRegistry,
+    ExtensionRegistrar,
+)
 from book2skill.sdk.services import (
     ExtractionService,
     SkillCompilerService,
@@ -54,7 +60,12 @@ from book2skill.sdk.services import (
     ValidatorRegistryService,
 )
 
+# Independently versioned public surface. Additive changes retain the same
+# major version; incompatible changes require a Core major-version migration.
+SDK_VERSION = "0.1"
+
 __all__ = [
+    "SDK_VERSION",
     # services
     "SourceService",
     "ExtractionService",
@@ -63,6 +74,9 @@ __all__ = [
     "ValidatorRegistryService",
     # context
     "ExtensionContext",
+    "ExtensionContributionRegistry",
+    "ExtensionRegistrar",
+    "ContributionRegistrationError",
     # models & contracts
     "ExtensionManifest",
     "ExtensionDependency",
@@ -78,6 +92,7 @@ __all__ = [
     "ExtractorCapabilities",
     "KnowledgeCluster",
     "KnowledgeRef",
+    "KnowledgeStatus",
     "KnowledgeUnit",
     "Locator",
     "LocatorKind",

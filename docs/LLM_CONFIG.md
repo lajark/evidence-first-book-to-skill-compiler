@@ -14,7 +14,7 @@ Book2Skill 支持三种 LLM 模式，从离线到在线渐进增强。LLM 接入
 
 ## 〇、一次性配置：`.env` 文件（推荐）
 
-不想每次命令都重复传 `--llm` / `--llm-api-key` / `--llm-base-url` / `--llm-model`？在项目根目录放一个 `.env` 文件，配置一次后所有 `analyze` / `batch` 命令自动生效。
+不想每次命令都重复传 `--llm` / `--llm-base-url` / `--llm-model`？在项目根目录放一个 `.env` 文件，配置一次后所有 `analyze` / `batch` 命令自动生效。API Key 只能通过环境变量或 `.env` 提供，不接受命令行参数，以免泄漏到 shell 历史或进程列表。
 
 ```bash
 cp .env.example .env    # 从模板复制（.env 已被 .gitignore 排除，不会提交）
@@ -26,6 +26,7 @@ cp .env.example .env    # 从模板复制（.env 已被 .gitignore 排除，不�
 | 变量 | 作用 | 云端示例 | 本地示例 |
 |------|------|---------|---------|
 | `BOOK2SKILL_LLM` | 默认适配器，免去每次 `--llm`；取 `mock`/`openai`/`compatible` | `compatible` | `compatible` |
+| `BOOK2SKILL_LOCALE` | 人类可读 CLI/进度输出语言；`zh-CN`（默认）或 `en` | `en` | `zh-CN` |
 | `LLM_API_KEY` | API Key | `sk-你的密钥` | `local` |
 | `LLM_BASE_URL` | OpenAI 兼容端点 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `http://localhost:11434/v1` |
 | `LLM_MODEL` | 模型名 | `qwen-plus` | `qwen2.5:7b` |
@@ -49,7 +50,7 @@ book2skill batch ./docs/ --json
 ```
 
 > **查找规则**：Book2Skill 从当前目录向上逐级查找 `.env`，因此在子目录运行命令也能找到项目根的 `.env`。
-> **优先级**：命令行参数 `--llm*` > 系统环境变量（`LLM_*` 优先于 `OPENAI_*`）> `.env` 文件 > 默认 Mock。命令行参数可临时覆盖 `.env`，便于一次性切换（如 `--llm mock` 跑离线）。
+> **优先级**：非敏感命令行参数（`--llm` / `--llm-model` / `--llm-base-url`）> 系统环境变量（`LLM_*` 优先于 `OPENAI_*`）> `.env` 文件 > 默认 Mock。API Key 只能从环境变量或 `.env` 读取；命令行参数可临时覆盖非敏感配置（如 `--llm mock` 跑离线）。
 > **不污染环境**：`.env` 由内置解析器读取，不会写入进程环境变量或日志；密钥不进 git、不进日志。
 
 ---
@@ -97,13 +98,7 @@ $env:LLM_API_KEY = "sk-你的密钥"
 set LLM_API_KEY=sk-你的密钥
 ```
 
-**方式 B：命令行参数**
-
-```bash
-book2skill analyze book.pdf --llm compatible --llm-api-key "sk-你的密钥"
-```
-
-**方式 C：写入 shell 配置（永久生效）**
+**方式 B：写入 shell 配置（永久生效）**
 
 ```bash
 # ~/.bashrc 或 ~/.zshrc
@@ -123,7 +118,6 @@ book2skill analyze book.pdf --llm compatible --llm-model gpt-4o-mini
 # 阿里云百炼
 book2skill analyze book.pdf \
   --llm compatible \
-  --llm-api-key "sk-你的百炼key" \
   --llm-base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
   --llm-model qwen-plus
 
@@ -174,7 +168,6 @@ book2skill analyze book.pdf --json | python -m json.tool | grep confidence
 ```bash
 book2skill analyze book.pdf \
   --llm compatible \
-  --llm-api-key local \
   --llm-base-url http://localhost:1234/v1 \
   --llm-model <LM Studio 中显示的模型名>
 ```
@@ -189,7 +182,6 @@ book2skill analyze book.pdf \
 ```bash
 book2skill analyze book.pdf \
   --llm compatible \
-  --llm-api-key local \
   --llm-base-url http://localhost:11434/v1 \
   --llm-model qwen2.5:7b
 ```
@@ -199,7 +191,6 @@ book2skill analyze book.pdf \
 ```bash
 book2skill analyze book.pdf \
   --llm compatible \
-  --llm-api-key <你的key或local> \
   --llm-base-url http://<host>:<port>/v1 \
   --llm-model <模型名>
 ```
@@ -211,8 +202,8 @@ book2skill analyze book.pdf \
 - **API Key 不会写入 git**：`.gitignore` 已排除 `.env`、`config.local.*` 等敏感文件，仅保留 `.env.example` 模板。
 - **不污染进程环境**：`.env` 由内置解析器读取后用于本次解析，不写入 `os.environ`，避免泄漏到子进程或日志。
 - **不记录正文和密钥**：Book2Skill 的日志默认不输出文档正文、提示词、密钥和模型原始响应。
-- **Key 来源优先级**：命令行参数 `--llm-api-key` > `LLM_API_KEY` 系统环境变量 > `OPENAI_API_KEY` 系统环境变量 > `.env` 文件 > 降级到 Mock。
-- **降级机制**：当 `openai` 包未安装、API Key 为空、或 LLM 调用失败时，自动降级到 Mock 适配器，管线不会中断。
+- **Key 来源优先级**：`LLM_API_KEY` 系统环境变量 > `OPENAI_API_KEY` 系统环境变量 > `.env` 文件；Key 从不进入命令行参数。
+- **降级机制**：当 `openai` 包未安装、API Key 为空、或 LLM 调用失败时，默认 fail-closed；只有显式传入 `--allow-llm-fallback` 才会回退 Mock。
 
 ---
 
@@ -223,7 +214,7 @@ book2skill analyze book.pdf \
 # Mock 模式：confidence 固定为 0.3/0.5/0.7/0.8（基于文本长度）
 # LLM 模式：confidence 由模型动态评估
 
-book2skill analyze book.pdf --llm compatible --llm-api-key local --llm-base-url http://localhost:1234/v1 --json | python -m json.tool | grep confidence
+LLM_API_KEY=local book2skill analyze book.pdf --llm compatible --llm-base-url http://localhost:1234/v1 --json | python -m json.tool | grep confidence
 ```
 
 如果 confidence 值不再是固定的 0.3/0.5/0.7/0.8，说明 LLM 已生效。

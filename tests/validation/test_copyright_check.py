@@ -95,6 +95,128 @@ class TestCopyrightCheck:
         result = CopyrightCheck().run(tmp_path)
         assert result.status == CheckStatus.PASS
 
+    def test_contiguous_source_blocks_are_aggregated(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            _VALID_FRONTMATTER + "# Skill\n", encoding="utf-8"
+        )
+        refs_dir = skill_dir / "references"
+        refs_dir.mkdir(exist_ok=True)
+        quote = " ".join(f"w{i}" for i in range(25))
+        (refs_dir / "a.md").write_text(
+            f'- src-1 / block-p1 — "{quote}"\n', encoding="utf-8"
+        )
+        (refs_dir / "b.md").write_text(
+            f'- src-1 / block-p2 — "{quote}"\n', encoding="utf-8"
+        )
+
+        result = CopyrightCheck().run(skill_dir)
+
+        assert result.status == CheckStatus.FAIL
+        assert "copyright.aggregate_quote_too_long" in result.evidence
+
+    def test_repeated_excerpt_across_files_is_flagged(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            _VALID_FRONTMATTER + "# Skill\n", encoding="utf-8"
+        )
+        refs_dir = skill_dir / "references"
+        refs_dir.mkdir(exist_ok=True)
+        quote = " ".join(f"repeat{i}" for i in range(25))
+        for name in ("a.md", "b.md"):
+            (refs_dir / name).write_text(
+                f'- src-1 / {name[:-3]} — "{quote}"\n', encoding="utf-8"
+            )
+
+        result = CopyrightCheck().run(skill_dir)
+
+        assert result.status == CheckStatus.FAIL
+        assert "copyright.duplicate_quote_too_long" in result.evidence
+
+    def test_near_duplicate_excerpt_is_flagged(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            _VALID_FRONTMATTER + "# Skill\n", encoding="utf-8"
+        )
+        refs_dir = skill_dir / "references"
+        refs_dir.mkdir(exist_ok=True)
+        first = " ".join(f"token{i}" for i in range(25))
+        second = first.replace("token12", "edited12")
+        (refs_dir / "a.md").write_text(
+            f'- src-1 / block-a — "{first}"\n', encoding="utf-8"
+        )
+        (refs_dir / "b.md").write_text(
+            f'- src-1 / block-b — "{second}"\n', encoding="utf-8"
+        )
+
+        result = CopyrightCheck().run(skill_dir)
+
+        assert result.status == CheckStatus.FAIL
+        assert "copyright.similar_quote_too_long" in result.evidence
+
+    def test_reordered_sentences_are_caught_by_phrase_fingerprints(
+        self, tmp_path: Path
+    ) -> None:
+        skill_dir = tmp_path
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            _VALID_FRONTMATTER + "# Skill\n", encoding="utf-8"
+        )
+        refs_dir = skill_dir / "references"
+        refs_dir.mkdir(exist_ok=True)
+        first_sentence = " ".join(f"first{i}" for i in range(10))
+        second_sentence = " ".join(f"second{i}" for i in range(11))
+        first = f"{first_sentence}. {second_sentence}."
+        second = f"{second_sentence}. {first_sentence}."
+        (refs_dir / "a.md").write_text(
+            f'- src-1 / block-a — "{first}"\n', encoding="utf-8"
+        )
+        (refs_dir / "b.md").write_text(
+            f'- src-1 / block-b — "{second}"\n', encoding="utf-8"
+        )
+
+        result = CopyrightCheck().run(skill_dir)
+
+        assert result.status == CheckStatus.FAIL
+        assert "copyright.fingerprint_similar_quote_too_long" in result.evidence
+
+    def test_quote_in_skill_body_is_checked(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        quote = " ".join(f"word{i}" for i in range(45))
+        (skill_dir / "SKILL.md").write_text(
+            _VALID_FRONTMATTER
+            + f'# Skill\n\n**Sources:**\n- src-1 / block-a — "{quote}"\n',
+            encoding="utf-8",
+        )
+
+        result = CopyrightCheck().run(skill_dir)
+
+        assert result.status == CheckStatus.FAIL
+        assert "copyright.quote_too_long" in result.evidence
+
+    def test_quote_in_wiki_body_is_checked(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            _VALID_FRONTMATTER + "# Skill\n", encoding="utf-8"
+        )
+        wiki_dir = skill_dir / "wiki"
+        wiki_dir.mkdir()
+        quote = " ".join(f"word{i}" for i in range(30))
+        (wiki_dir / "chapters.md").write_text(
+            f'## Chapter\n\n**Sources:**\n- src-1 / block-a — "{quote}"\n',
+            encoding="utf-8",
+        )
+
+        result = CopyrightCheck().run(skill_dir)
+
+        assert result.status == CheckStatus.WARN
+        assert "copyright.long_quote" in result.evidence
+
     def test_no_references_dir_passes(self, tmp_path: Path) -> None:
         skill_dir = tmp_path
         skill_dir.mkdir(parents=True, exist_ok=True)

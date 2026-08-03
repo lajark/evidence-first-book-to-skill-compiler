@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from acceptance_metrics import (  # noqa: E402
+    acceptance_failures,
+    analyze_bundle_metrics,
+    skill_tree_metrics,
+)
 from tests.fixtures.acceptance import generate_samples  # noqa: E402
 
 
@@ -52,6 +58,8 @@ class StepResult:
     stderr_preview: str
     artifacts: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    quality_metrics: dict[str, int | float] = field(default_factory=dict)
+    quality_failures: list[str] = field(default_factory=list)
     skipped: bool = False
     skip_reason: str = ""
 
@@ -67,6 +75,7 @@ class AcceptanceRunner:
         self.logs_dir = self.run_root / "logs"
         self.keep_samples = keep_samples
         self.results: list[StepResult] = []
+        self._json_payloads: dict[str, object] = {}
         self.run_id = self.run_root.name
 
     # ------------------------------------------------------------------ utils
@@ -136,6 +145,8 @@ class AcceptanceRunner:
             stderr_preview=proc.stderr[:1000],
             artifacts=[str(log_path)],
         )
+        with suppress(json.JSONDecodeError):
+            self._json_payloads[step_id] = json.loads(proc.stdout)
         self.results.append(result)
         return result
 
@@ -155,6 +166,43 @@ class AcceptanceRunner:
         )
         self.results.append(result)
         return result
+
+    def _json_stdout(self, result: StepResult) -> dict[str, Any] | None:
+        """Parse a command's single JSON stdout envelope, if it succeeded."""
+        if result.exit_code != 0:
+            return None
+        payload = self._json_payloads.get(result.step_id)
+        if payload is None:
+            result.quality_failures.append("stdout is not a single JSON document")
+            return None
+        if not isinstance(payload, dict):
+            result.quality_failures.append("JSON stdout is not an object")
+            return None
+        return payload
+
+    def _verify_analysis_quality(
+        self, result: StepResult, *, expected_source_count: int
+    ) -> None:
+        """Attach evidence-bound source coverage metrics to Analyze output."""
+        payload = self._json_stdout(result)
+        if payload is None:
+            return
+        metrics = analyze_bundle_metrics(payload)
+        result.quality_metrics.update(metrics)
+        result.quality_failures.extend(acceptance_failures(metrics))
+        if metrics["source_count"] != expected_source_count:
+            result.quality_failures.append(
+                f"expected {expected_source_count} Analyze sources, got "
+                f"{metrics['source_count']}"
+            )
+
+    def _verify_skill_quality(self, result: StepResult, skill_dir: Path) -> None:
+        """Attach citation and quality-gate evidence for one generated Skill."""
+        if result.exit_code != 0:
+            return
+        metrics = skill_tree_metrics(skill_dir)
+        result.quality_metrics.update(metrics)
+        result.quality_failures.extend(acceptance_failures(metrics))
 
     # ------------------------------------------------------------------ steps
 
@@ -204,7 +252,8 @@ class AcceptanceRunner:
             "--rights-note", "M6 acceptance: synthetic samples, no copyright",
             "--json",
         ]
-        self._run("S1", "analyze-A-E", args)
+        result = self._run("S1", "analyze-A-E", args)
+        self._verify_analysis_quality(result, expected_source_count=len(targets))
 
     def step_build_abc(self, samples: dict[str, dict[str, Any]]) -> None:
         """Step 2: Full Build on A, B, C (one skill per category)."""
@@ -255,7 +304,8 @@ class AcceptanceRunner:
                 )
                 continue
             args = ["validate", str(skill_dir), "--json"]
-            self._run(f"S4-{cat}", f"validate-{cat}", args)
+            result = self._run(f"S4-{cat}", f"validate-{cat}", args)
+            self._verify_skill_quality(result, skill_dir)
 
     def step_validate_injection(self, samples: dict[str, dict[str, Any]]) -> None:
         """Step 5: Validate the G3 injection skill (must FAIL)."""
@@ -322,13 +372,14 @@ class AcceptanceRunner:
         return self._write_summary()
 
     def _write_summary(self) -> dict[str, Any]:
-        passed = sum(1 for r in self.results if r.exit_code == 0 and not r.skipped)
-        failed = sum(
-            1 for r in self.results
-            if r.exit_code != 0
-            and not r.skipped
+        passed = sum(
+            1
+            for r in self.results
+            if not r.skipped
+            and not self._is_unexpected_failure(r)
             and not (r.step_id == "S5" and r.exit_code == 1)
         )
+        failed = sum(1 for r in self.results if self._is_unexpected_failure(r))
         skipped = sum(1 for r in self.results if r.skipped)
         expected_fail = sum(
             1 for r in self.results
@@ -362,11 +413,14 @@ class AcceptanceRunner:
             "",
         ]
         for r in self.results:
-            status = "SKIP" if r.skipped else (
-                "PASS" if r.exit_code == 0 else (
-                    "FAIL_EXPECTED" if r.step_id == "S5" else "FAIL"
-                )
-            )
+            if r.skipped:
+                status = "SKIP"
+            elif r.step_id == "S5" and r.exit_code == 1:
+                status = "FAIL_EXPECTED"
+            elif self._is_unexpected_failure(r):
+                status = "FAIL"
+            else:
+                status = "PASS"
             lines.append(
                 f"- [{status}] {r.step_id} {r.name} "
                 f"(exit={r.exit_code}, {r.duration_s:.2f}s)"
@@ -375,11 +429,27 @@ class AcceptanceRunner:
                 lines.append(f"  - reason: {r.skip_reason}")
             for note in r.notes:
                 lines.append(f"  - {note}")
+            if r.quality_metrics:
+                lines.append(
+                    "  - quality_metrics: "
+                    + json.dumps(r.quality_metrics, sort_keys=True)
+                )
+            for failure in r.quality_failures:
+                lines.append(f"  - quality_failure: {failure}")
         (self.run_root / "summary.md").write_text(
             "\n".join(lines), encoding="utf-8"
         )
 
         return summary
+
+    @staticmethod
+    def _is_unexpected_failure(result: StepResult) -> bool:
+        """Treat unmet quality invariants as failed acceptance steps too."""
+        if result.skipped:
+            return False
+        if result.step_id == "S5":
+            return result.exit_code != 1
+        return result.exit_code != 0 or bool(result.quality_failures)
 
 
 def main() -> int:

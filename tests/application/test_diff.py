@@ -119,6 +119,12 @@ class TestDiffEngineDiff:
         assert result.removed == [u]
         assert result.added == []
 
+    def test_old_only_units_are_retained_when_removals_disabled(self) -> None:
+        u = _unit(unit_id="u1")
+        result = DiffEngine().diff([u], [], allow_removals=False)
+        assert result.removed == []
+        assert result.unchanged == [u]
+
     def test_identical_units_are_unchanged(self) -> None:
         u = _unit(unit_id="u1")
         result = DiffEngine().diff([u], [u])
@@ -290,6 +296,17 @@ class TestMergeWithOverrides:
         result = DiffEngine().merge_with_overrides([base], [], [ov])
         assert result.merged == []
         assert ov in result.preserved_overrides
+
+    def test_base_only_unit_retained_when_removals_disabled(self) -> None:
+        """Add-only fold-in keeps base-only units and their active overrides."""
+        base = _unit(unit_id="u1", content="base")
+        ov = _override(unit_id="u1", value="human-edit")
+        result = DiffEngine().merge_with_overrides(
+            [base], [], [ov], allow_removals=False
+        )
+        assert [u.unit_id for u in result.merged] == ["u1"]
+        assert result.merged[0].content == "human-edit"
+        assert ov in result.applied_overrides
 
     def test_empty_inputs_yield_empty_merge(self) -> None:
         result = DiffEngine().merge_with_overrides([], [], [])

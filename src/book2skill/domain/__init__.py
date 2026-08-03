@@ -1,6 +1,7 @@
 """Public domain exports."""
 
 from book2skill.domain.errors import DomainError, ErrorCode
+from book2skill.domain.identifiers import derive_block_id, derive_candidate_unit_id
 from book2skill.domain.knowledge import (
     ConflictRecord,
     KnowledgeCluster,
@@ -57,4 +58,6 @@ __all__ = [
     "build_supersession",
     "current_view",
     "active_view",
+    "derive_block_id",
+    "derive_candidate_unit_id",
 ]

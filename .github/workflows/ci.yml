@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: core (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install locked core and development dependencies
+        run: python -m pip install -r requirements-lock.txt
+      - name: Install project without re-resolving dependencies
+        run: python -m pip install -e . --no-deps
+      - name: Test
+        run: python -m pytest -q
+      - name: Lint
+        run: python -m ruff check src tests scripts
+      - name: Type check
+        run: python -m mypy src
+      - name: Check provenance
+        run: python scripts/check_provenance.py
+
+  optional-extra:
+    name: optional ${{ matrix.extra }} (Python 3.11)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - extra: pdf
+            module: fitz
+          - extra: epub
+            module: ebooklib
+          - extra: docx
+            module: docx
+          - extra: html
+            module: bs4
+          - extra: llm
+            module: openai
+          - extra: ocr
+            module: PIL
+          - extra: docling
+            module: docling
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install one optional extra with development dependencies
+        run: python -m pip install -e ".[dev,${{ matrix.extra }}]"
+      - name: Verify the selected optional dependency imports
+        run: python -c "import importlib; importlib.import_module('${{ matrix.module }}')"
+      - name: Verify project imports with the selected extra
+        run: python -c "import book2skill; print(book2skill.__version__)"

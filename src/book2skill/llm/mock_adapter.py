@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 
-from book2skill.domain import TextBlock
+from book2skill.domain import TextBlock, derive_block_id, derive_candidate_unit_id
+from book2skill.llm.chunking import ChunkItem
 
 # Heuristic markers for guessing knowledge-unit kinds.
 _PRINCIPLE_MARKERS = ("should", "must", "always", "never", "principle", "rule")
@@ -36,13 +37,14 @@ class MockLLMAdapter:
         """
         structure: list[dict[str, object]] = []
         for idx, block in enumerate(blocks, start=1):
+            block_id = derive_block_id(source_id, block.locator, idx)
             first_line = block.text.split("\n", 1)[0].strip()
             level = _heading_level(first_line)
             if level == 0 and not _looks_like_heading(first_line):
                 continue
             structure.append(
                 {
-                    "block_id": f"{source_id}-{idx}",
+                    "block_id": block_id,
                     "locator": block.locator.model_dump(mode="json"),
                     "heading": first_line.lstrip("# ").strip(),
                     "level": level or 1,
@@ -50,6 +52,22 @@ class MockLLMAdapter:
                 }
             )
         return structure
+
+    def analyze_chunk(
+        self, source_id: str, items: list[ChunkItem]
+    ) -> dict[str, list[dict[str, object]]]:
+        """Return structure and candidates in one deterministic chunk call."""
+        structure: list[dict[str, object]] = []
+        candidates: list[dict[str, object]] = []
+        for item in items:
+            block = TextBlock(text=item.text, locator=item.locator)
+            for entry in self.analyze_structure(source_id, [block]):
+                entry["input_id"] = item.input_id
+                structure.append(entry)
+            for entry in self.extract_candidates(source_id, [block]):
+                entry["input_id"] = item.input_id
+                candidates.append(entry)
+        return {"structure": structure, "candidates": candidates}
 
     def extract_candidates(
         self,
@@ -59,12 +77,12 @@ class MockLLMAdapter:
         """Produce one candidate knowledge unit per text block."""
         candidates: list[dict[str, object]] = []
         for idx, block in enumerate(blocks, start=1):
-            block_id = f"{source_id}-{idx}"
+            block_id = derive_block_id(source_id, block.locator, idx)
             kind = _guess_kind(block.text)
             confidence = _estimate_confidence(block.text)
             candidates.append(
                 {
-                    "unit_id": f"cu-{source_id}-{idx}",
+                    "unit_id": derive_candidate_unit_id(block_id, 1),
                     "kind": kind,
                     "content": block.text,
                     "source_refs": [

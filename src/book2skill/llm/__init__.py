@@ -8,5 +8,23 @@ offline with a rule-based :class:`~book2skill.llm.mock_adapter.MockLLMAdapter`
 from book2skill.llm.mock_adapter import MockLLMAdapter
 from book2skill.llm.openai_adapter import OpenAIAdapter
 from book2skill.llm.ports import LLMAdapter
+from book2skill.llm.runtime import (
+    AnalysisRunManifest,
+    LLMRuntimeConfig,
+    LLMRuntimeError,
+    RuntimeLLMAdapter,
+    build_llm_adapter,
+    resolve_runtime_config,
+)
 
-__all__ = ["LLMAdapter", "MockLLMAdapter", "OpenAIAdapter"]
+__all__ = [
+    "AnalysisRunManifest",
+    "LLMAdapter",
+    "LLMRuntimeConfig",
+    "LLMRuntimeError",
+    "MockLLMAdapter",
+    "OpenAIAdapter",
+    "RuntimeLLMAdapter",
+    "build_llm_adapter",
+    "resolve_runtime_config",
+]

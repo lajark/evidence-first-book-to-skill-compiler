@@ -190,16 +190,27 @@ class PdfExtractor(Extractor):
                 )
 
         sanitized_text, _removed = sanitize_extracted_text(text)
+        pages = self._pages(sanitized_text)
+        # A single-page PDF is still safely addressable as page 1 even when a
+        # fallback backend omits form-feed separators. For multi-page output,
+        # never infer page numbers from a flattened text stream.
+        page_count = (
+            count_pages(str(path)) if "\f" not in sanitized_text else len(pages)
+        )
+        has_page_boundaries = "\f" in sanitized_text or (
+            page_count == 1 and len(pages) == 1
+        )
+        locator_kind = LocatorKind.PAGE if has_page_boundaries else LocatorKind.UNKNOWN
         return [
             TextBlock(
                 text=page_text,
                 locator=Locator(
-                    kind=LocatorKind.PAGE,
-                    page=idx,
+                    kind=locator_kind,
+                    page=idx if has_page_boundaries else None,
                     paragraph=None,
                 ),
             )
-            for idx, page_text in enumerate(self._pages(sanitized_text), start=1)
+            for idx, page_text in enumerate(pages, start=1)
             if page_text
         ]
 
@@ -232,7 +243,11 @@ class PdfExtractor(Extractor):
 
         entries = [
             ExtractionMapEntry(
-                block_id=f"{source_id}-pg{idx}",
+                block_id=(
+                    f"{source_id}-pg{idx}"
+                    if block.locator.kind == LocatorKind.PAGE
+                    else f"{source_id}-b{idx}"
+                ),
                 source_id=source_id,
                 text_sha256=hashlib.sha256(block.text.encode("utf-8")).hexdigest(),
                 locator=block.locator,

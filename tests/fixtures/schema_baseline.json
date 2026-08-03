@@ -1,0 +1,10 @@
+{
+  "analysis-bundle.schema.json": "f03beb7aa61b5b5ee9efcabde3118fae639e4ee5f3556b87c6306f3a2cd3bece",
+  "extension-manifest.schema.json": "a906fae5062286e107e8686740ec45a3ec784c21674d2227284d4357ef80c6b3",
+  "extraction-map-entry.schema.json": "35e63029535209cafaaff68f72b0f4cf27516c02027ed4a6e8a7da7773ea3172",
+  "knowledge-unit.schema.json": "9f60e492eff38fffd84e95f5c87057ac4c2049f2e7199173e77e97d5dbea9602",
+  "quality-report.schema.json": "0d64edeb6b06715cd030a0a3c2bc3180e772f5b1f34c7f9bb5f30db6477faae8",
+  "release-manifest.schema.json": "eda50892cd7d2cf3b38cd8f9c40febf76a7b9504ebf7feba705b3abe2e675a39",
+  "skill-ir.schema.json": "137e086a669d211ef9a4f618def8c1d9341b0b91148eaeb3af8e65b68f406527",
+  "source-manifest.schema.json": "9ec445209079ed25534220b38c54f2a1e63d458a8848814e5828e59761f27a32"
+}
