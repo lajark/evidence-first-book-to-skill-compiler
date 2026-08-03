@@ -172,6 +172,16 @@ def _copy_static(repo: Path, pkg_root: Path, version: str) -> None:
             shutil.copytree(src, dest)
         else:
             dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    # Ship the LLM config template + guide so deployments can wire up cloud
+    # models without cloning the source repo. See RELEASE_PACKAGE_SPEC §"LLM".
+    env_template = repo / ".env.example"
+    if env_template.is_file():
+        shutil.copy2(env_template, pkg_root / ".env.example")
+    llm_guide = repo / "docs" / "LLM_CONFIG.md"
+    if llm_guide.is_file():
+        docs_target = pkg_root / "docs"
+        docs_target.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(llm_guide, docs_target / "LLM_CONFIG.md")
     (pkg_root / "README_INSTALL.md").write_text(
         _README_INSTALL_TEMPLATE.format(version=version), encoding="utf-8"
     )
@@ -287,11 +297,66 @@ _README_INSTALL_TEMPLATE = """# Book2Skill Core {version}
 Official release package. Validate, extract, then run the installer **only
 after you have reviewed the manifest and checksums**.
 
+## Install
+
 1. Verify the ZIP hash against `book2skill-core-{version}.zip.sha256`.
 2. Extract to a fresh directory (never run from inside the archive).
 3. Review `release-manifest.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`.
-4. `python install.py` (or `python3 install.py`) to create a dedicated env,
-   install the Wheel, initialise the registry and run `book2skill doctor`.
+4. `python install.py` (or `python3 install.py`) to create a dedicated
+   virtualenv under `$BOOK2SKILL_HOME/venv` (default `~/.book2skill/venv`)
+   and install the bundled Wheel. Set `BOOK2SKILL_HOME=<dir>` to deploy
+   somewhere other than the user home.
+5. Verify the install (`.env` not yet required — defaults to Mock mode):
+   - Windows: `venv\\Scripts\\book2skill version`
+   - POSIX:   `venv/bin/book2skill version`
+
+## 接入大模型（可选，默认为 Mock 离线模式）
+
+要使用云端 LLM（OpenAI / 阿里云百炼 / Azure / Ollama 等任何 OpenAI 兼容
+端点），需补装 `llm` 可选依赖并配置 `.env`。本包根目录已随附
+`.env.example` 模板，完整字段与优先级说明见 `docs/LLM_CONFIG.md`。
+
+### 1. 补装 LLM 依赖（在安装好的 venv 内）
+
+```
+<venv-python> -m pip install "book2skill[llm]" \\
+  -i https://pypi.tuna.tsinghua.edu.cn/simple \\
+  --trusted-host pypi.tuna.tsinghua.edu.cn
+```
+
+> `<venv-python>` 为 `BOOK2SKILL_HOME/venv/Scripts/python.exe`（Windows）或
+> `BOOK2SKILL_HOME/venv/bin/python`（POSIX）。亦可省略镜像参数使用官方 PyPI。
+
+### 2. 从模板创建 `.env`
+
+```
+cp .env.example .env          # POSIX
+copy .env.example .env        # Windows CMD
+```
+
+### 3. 编辑 `.env` 填入端点与密钥
+
+```ini
+BOOK2SKILL_LLM=compatible
+LLM_API_KEY=sk-你的密钥
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen-plus
+```
+
+完整变量表、本地部署（LM Studio / Ollama / vLLM）与安全注意事项见
+`docs/LLM_CONFIG.md`。
+
+### 4. 运行（`.env` 已配好，无需任何 `--llm*` 参数）
+
+```
+book2skill analyze book.pdf --json
+```
+
+> **位置说明**：`.env` 由内置解析器从当前工作目录向上逐级查找，放在运行
+> `book2skill` 的目录（或其任一父目录）即可生效。`.env` 不写入进程环境变量
+> 与日志，已被 `.gitignore` 排除不入库；API Key 仅接受环境变量或 `.env`，
+> 不接受命令行参数。优先级：命令行非敏感参数 > 系统环境变量（`LLM_*` >
+> `OPENAI_*`）> `.env` > 默认 Mock。
 """
 
 _INSTALL_SCRIPT_TEMPLATE = '''"""Book2Skill Core installer (FR-12).

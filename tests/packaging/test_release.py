@@ -55,6 +55,8 @@ class TestReleasePackage:
                 "checksums.sha256",
                 "install.py",
                 "README_INSTALL.md",
+                ".env.example",
+                "docs/LLM_CONFIG.md",
                 "contracts/extension-manifest.schema.json",
                 "contracts/release-manifest.schema.json",
                 "sdk/api-surface.json",
