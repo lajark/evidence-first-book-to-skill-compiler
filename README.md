@@ -394,6 +394,21 @@ book2skill analyze input/my-book.pdf \
 
 ## CLI 命令参考
 
+> **如何在 bash 中调用 `book2skill`？** `book2skill` 不是全局命令，它只存在于虚拟环境内。下表及全文示例中的 `book2skill ...` 都需先满足下列**任一**条件——**不需要任何额外前缀**，要么先激活 venv，要么用全路径：
+>
+> 1. **激活 venv（推荐，每个新终端一次）**
+>    - bash / Git Bash：`source .venv/Scripts/activate`
+>    - PowerShell：`.venv\Scripts\Activate.ps1`
+>    - cmd：`.venv\Scripts\activate.bat`
+>
+>    激活后提示符会出现 `(.venv)` 前缀，此时直接敲 `book2skill ...` 即可。
+> 2. **用全路径调用（不想激活时）**
+>    - bash / Git Bash：`.venv/Scripts/book2skill.exe analyze ...`
+>    - PowerShell：`.venv\Scripts\book2skill.exe analyze ...`
+> 3. **发布包安装位置**（如安装到 `D:\AI\MyApp\book2skill`）：venv 目录是 `venv/` 而非 `.venv/`，相应改为 `source venv/Scripts/activate` 或 `venv/Scripts/book2skill.exe ...`。
+>
+> 未激活直接敲 `book2skill` 会报 `command not found`（bash）或 `not recognized`（PowerShell）——这是正常的，命令只在 venv 内。安装与激活详解见上文「安装」一节。
+
 | 命令 | 说明 | 关键选项 |
 |------|------|---------|
 | `analyze` | 分析文档，输出 AnalysisBundle | `--json`, `--data-home`, `--collection-id`, `--llm` |
