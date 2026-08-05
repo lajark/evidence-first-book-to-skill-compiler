@@ -107,6 +107,11 @@ def test_chunk_prompt_requires_actionable_paraphrases() -> None:
     assert "20 consecutive CJK characters" in prompt
     assert "state changes" in prompt
     assert "at most 8 candidates" in prompt
+    # case + framework-artifact guidance must reach the chunk prompt so
+    # scenarios and structured artifacts survive as distinct units.
+    assert "`case` candidates" in prompt
+    assert "tracking table" in prompt
+    assert "`framework` candidate" in prompt
 
 
 def test_chunk_prompt_locale_directs_content_language() -> None:
@@ -135,6 +140,15 @@ def test_synthesis_prompt_includes_heading_anchors_when_provided() -> None:
 def test_synthesis_prompt_omits_anchors_when_no_structure() -> None:
     prompt = _build_synthesis_prompt("src1", "book", [])
     assert "Source section headings" not in prompt
+
+
+def test_synthesis_prompt_guides_case_and_framework_artifacts() -> None:
+    """Synthesis must preserve scenarios as case units and structured
+    artifacts as framework units, not fold them into techniques."""
+    prompt = _build_synthesis_prompt("src1", "book", [])
+    assert "`case` units (not techniques)" in prompt
+    assert "tracking table" in prompt
+    assert "`framework` unit" in prompt
 
 
 def test_synthesis_prompt_ignores_empty_headings() -> None:

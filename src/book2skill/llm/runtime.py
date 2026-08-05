@@ -83,7 +83,7 @@ class LLMRuntimeConfig:
     api_key: str | None = field(default=None, repr=False, compare=False)
     allow_fallback: bool = False
     temperature: float = 0.2
-    prompt_version: str = "analysis-v4"
+    prompt_version: str = "analysis-v5"
     response_schema_version: str = "analysis-response-v2"
     locale: Locale = "zh-CN"
     max_retries: int = 2
