@@ -1,0 +1,108 @@
+# Book2Skill 多 provider profile 模板（P1）
+#
+# 复制为 llm-profiles.local.yaml 并按需修改，再用：
+#   book2skill analyze <sources> --llm-profiles llm-profiles.local.yaml [--llm-profile <id>]
+#   python scripts/benchmark_abc.py --profiles llm-profiles.local.yaml --output-dir ...
+#
+# 铁律：API Key 只能通过环境变量或 .env 提供，绝不能写进本文件。
+# 每个 profile 的 api_key_env 是“环境变量名”，不是密钥本身。
+#   - 密钥来源：shell 环境变量优先，缺省时读 .env 兜底。
+#   - 一个 key 可被多个 profile 共用；也可按 key 拆分（摊薄按 key 的限流）。
+#
+# 本模板预留 5 个通道插槽（channel-1..channel-5），每个是完整定义
+# （provider / model / base_url / api_key_env / roles / 成本 / 数据策略）。
+# 用 --skip-missing 时，只有 api_key_env 对应密钥存在的插槽才会激活参与路由，
+# 实际通道数 = 有密钥的插槽数（默认 fail-closed，缺密钥会报错）。
+# 不同供应商可各填各自的 base_url 与 model；相同供应商多 key 可共用一个端点。
+
+schema_version: 1
+
+# 综合阶段默认强模型；必须等于 profiles 中某个 profile_id。
+# 注意：动态激活时默认通道的密钥必须存在（fail-closed）。
+default_profile: channel-1
+
+profiles:
+  # —— 通道 1：默认工作通道（Map + 归约 + 综合 + Skill + 复核）——
+  - profile_id: channel-1
+    provider: openai
+    model: deepseek-v4-flash-0731
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: LLM_API_KEY_1
+    roles: [map, section_reduce, book_reduce, synthesis, skill, critic, arbiter]
+    max_concurrent_requests: 2
+    requests_per_minute: 15
+    request_timeout_seconds: 180
+    max_retries: 2
+    circuit_failure_threshold: 3
+    cost_per_million_input_tokens: 0.14
+    cost_per_million_output_tokens: 0.28
+    data_send_policy: original_text_allowed
+    allowed_material_categories: [licensed_book, public_doc]
+
+  # —— 通道 2：并行 Map 辅助 / 复核（示例：同一供应商第二个 key）——
+  - profile_id: channel-2
+    provider: openai
+    model: deepseek-v4-flash-0731          # 相同模型 = 摊薄按 key 限流
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: LLM_API_KEY_2
+    roles: [map, section_reduce, book_reduce, synthesis, skill, critic, arbiter]
+    max_concurrent_requests: 2
+    requests_per_minute: 15
+    request_timeout_seconds: 180
+    max_retries: 2
+    circuit_failure_threshold: 3
+    cost_per_million_input_tokens: 0.14
+    cost_per_million_output_tokens: 0.28
+    data_send_policy: original_text_allowed
+    allowed_material_categories: [licensed_book, public_doc]
+
+  # —— 通道 3：不同供应商（示例：替换为你的供应商端点与模型）——
+  - profile_id: channel-3
+    provider: openai
+    model: <your-model>
+    base_url: https://<your-provider>/v1
+    api_key_env: LLM_API_KEY_3
+    roles: [map, section_reduce, book_reduce, synthesis, skill, critic, arbiter]
+    max_concurrent_requests: 2
+    requests_per_minute: 15
+    request_timeout_seconds: 180
+    max_retries: 2
+    circuit_failure_threshold: 3
+    cost_per_million_input_tokens: 0.0
+    cost_per_million_output_tokens: 0.0
+    data_send_policy: original_text_allowed
+    allowed_material_categories: [licensed_book, public_doc]
+
+  # —— 通道 4：预留插槽（复制上面任一完整定义并改 profile_id/key_env）——
+  - profile_id: channel-4
+    provider: openai
+    model: <your-model>
+    base_url: https://<your-provider>/v1
+    api_key_env: LLM_API_KEY_4
+    roles: [map, section_reduce, book_reduce, synthesis, skill, critic, arbiter]
+    max_concurrent_requests: 2
+    requests_per_minute: 15
+    request_timeout_seconds: 180
+    max_retries: 2
+    circuit_failure_threshold: 3
+    cost_per_million_input_tokens: 0.0
+    cost_per_million_output_tokens: 0.0
+    data_send_policy: original_text_allowed
+    allowed_material_categories: [licensed_book, public_doc]
+
+  # —— 通道 5：预留插槽 ——
+  - profile_id: channel-5
+    provider: openai
+    model: <your-model>
+    base_url: https://<your-provider>/v1
+    api_key_env: LLM_API_KEY_5
+    roles: [map, section_reduce, book_reduce, synthesis, skill, critic, arbiter]
+    max_concurrent_requests: 2
+    requests_per_minute: 15
+    request_timeout_seconds: 180
+    max_retries: 2
+    circuit_failure_threshold: 3
+    cost_per_million_input_tokens: 0.0
+    cost_per_million_output_tokens: 0.0
+    data_send_policy: original_text_allowed
+    allowed_material_categories: [licensed_book, public_doc]

@@ -13,7 +13,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from book2skill.domain import Locator, LocatorKind, TextBlock
-from book2skill.llm.openai_adapter import OpenAIAdapter, _parse_json_array
+from book2skill.llm.chunking import ChunkItem
+from book2skill.llm.openai_adapter import (
+    OpenAIAdapter,
+    _build_chunk_prompt,
+    _build_synthesis_prompt,
+    _parse_json_array,
+    _render_heading_anchors,
+)
 from book2skill.llm.runtime import LLMResponseError, LLMRuntimeError
 
 
@@ -88,6 +95,64 @@ class TestResponseParsing:
         assert result[0] == {"a": 1}
 
 
+def test_chunk_prompt_requires_actionable_paraphrases() -> None:
+    prompt = _build_chunk_prompt(
+        "src1",
+        [
+            ChunkItem("input", "block", "Source content", _make_blocks()[0].locator)
+        ],
+    )
+
+    assert "concise, original-language paraphrase" in prompt
+    assert "20 consecutive CJK characters" in prompt
+    assert "state changes" in prompt
+    assert "at most 8 candidates" in prompt
+
+
+def test_chunk_prompt_locale_directs_content_language() -> None:
+    """Locale must thread into the prompt so content matches the target language."""
+    item = [
+        ChunkItem("input", "block", "Source content", _make_blocks()[0].locator)
+    ]
+    zh = _build_chunk_prompt("src1", item, "zh-CN")
+    en = _build_chunk_prompt("src1", item, "en")
+    assert "Simplified Chinese (zh-CN)" in zh
+    assert "must be written in Chinese" in zh
+    assert "Simplified Chinese" not in en
+    assert "Respond strictly in English" in en
+
+
+def test_synthesis_prompt_includes_heading_anchors_when_provided() -> None:
+    structure = [{"heading": "第一章 始计"}, {"heading": "第二章 作战"}]
+    prompt = _build_synthesis_prompt("src1", "book", [], structure)
+    assert "Source section headings" in prompt
+    assert "1. 第一章 始计" in prompt
+    assert "2. 第二章 作战" in prompt
+    # Anchors sit before the candidates payload block.
+    assert prompt.index("Source section headings") < prompt.index("[")
+
+
+def test_synthesis_prompt_omits_anchors_when_no_structure() -> None:
+    prompt = _build_synthesis_prompt("src1", "book", [])
+    assert "Source section headings" not in prompt
+
+
+def test_synthesis_prompt_ignores_empty_headings() -> None:
+    structure = [{"heading": ""}, {"heading": "   "}, {"other": "x"}, {}]
+    prompt = _build_synthesis_prompt("src1", "chapter", [], structure)
+    assert "Source section headings" not in prompt
+
+
+def test_render_heading_anchors_deduplicates_and_caps() -> None:
+    structure = [{"heading": "A"}] * 5 + [{"heading": f"S{i}"} for i in range(40)]
+    rendered = _render_heading_anchors(structure)
+    lines = rendered.strip().splitlines()
+    # Header line + 32 anchored headings (dedup A, then S0..S30).
+    assert len(lines) == 1 + 32
+    assert "3. A" not in "\n".join(lines)  # A deduplicated after first occurrence
+    assert "S31" not in rendered  # capped at 32
+
+
 class TestMockedClient:
     """When a client is injected, the adapter calls it and parses results."""
 
@@ -101,6 +166,7 @@ class TestMockedClient:
         adapter._base_url = None
         adapter._temperature = 0.2
         adapter._request_timeout_seconds = 12.5
+        adapter._locale = "zh-CN"
 
         # Build a fake client.
         fake_choice = MagicMock()
@@ -175,6 +241,32 @@ class TestMockedClient:
         assert len(result) == 1
         assert result[0]["name"] == "solid-principles"
 
+    def test_synthesize_candidates_with_llm(self) -> None:
+        adapter = self._make_adapter_with_mock_client(
+            json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "kind": "framework",
+                            "content": "Start a bounded work cycle.",
+                            "confidence": "0.9",
+                            "source_unit_ids": ["cu-1"],
+                            "conditions": ["When work is selected."],
+                            "exceptions": ["When interrupted."],
+                        }
+                    ]
+                }
+            )
+        )
+
+        result = adapter.synthesize_candidates(
+            "src1", "chapter", [{"unit_id": "cu-1", "content": "card"}]
+        )
+
+        assert result[0]["kind"] == "framework"
+        assert result[0]["source_unit_ids"] == ["cu-1"]
+        assert result[0]["confidence"] == 0.9
+
     def test_llm_returns_malformed_response_error(self) -> None:
         adapter = self._make_adapter_with_mock_client("not valid json")
         with pytest.raises(LLMResponseError):
@@ -194,6 +286,7 @@ class TestOutputNormalization:
         adapter._base_url = None
         adapter._temperature = 0.2
         adapter._request_timeout_seconds = 12.5
+        adapter._locale = "zh-CN"
         fake_choice = MagicMock()
         fake_choice.message.content = response_text
         fake_resp = MagicMock()
@@ -260,10 +353,11 @@ class TestOutputNormalization:
         adapter._api_key = "sk-test"
         adapter._base_url = None
         adapter._temperature = 0.2
+        adapter._locale = "zh-CN"
 
         fake_client = MagicMock()
         fake_client.chat.completions.create.side_effect = RuntimeError("network error")
         adapter._client = fake_client
 
-        with pytest.raises(LLMRuntimeError):
+        with pytest.raises(LLMRuntimeError, match="RuntimeError"):
             adapter.analyze_structure("src1", _make_blocks())

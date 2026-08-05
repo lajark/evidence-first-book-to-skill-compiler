@@ -1,0 +1,74 @@
+# 孙子兵法 (L1) benchmark-slot expectations.
+# These are heuristic coverage proxies for the rubric in
+# Skill提炼质量评估基准/01_孙子兵法_Skill提炼质量评估基准.md — not a
+# substitute for the 100-point evaluation. A slot is covered when at least
+# min_count candidate units of an allowed kind contain any keyword and carry
+# a source ref.
+schema_version: 1
+book_id: sunzi
+slots:
+  - slot_id: A1
+    rubric_item_id: A1
+    kinds: [principle, framework]
+    keywords: [始计, 作战篇, 谋攻篇, 军形篇, 兵势篇, 虚实篇, 军争篇, 九变篇, 行军篇, 地形篇, 九地篇, 火攻篇, 用间篇]
+    min_count: 3
+  - slot_id: A2
+    rubric_item_id: A2
+    kinds: [principle, decision_rule]
+    keywords: [五事, 道天将法, 七计, 庙算]
+    min_count: 1
+  - slot_id: A3
+    rubric_item_id: A3
+    kinds: [principle, decision_rule]
+    keywords: [不战而屈人之兵, 全胜, 上兵伐谋]
+    min_count: 1
+  - slot_id: A4
+    rubric_item_id: A4
+    kinds: [principle, decision_rule]
+    keywords: [知彼知己, 知天知地, 先知]
+    min_count: 1
+  - slot_id: B1
+    rubric_item_id: B1
+    kinds: [framework, principle]
+    keywords: [势, 形, 奇正, 虚实]
+    min_count: 1
+  - slot_id: C1
+    rubric_item_id: C1
+    kinds: [decision_rule, checklist, technique]
+    keywords: [庙算, 五事, 七计, 决策]
+    min_count: 1
+  - slot_id: C2
+    rubric_item_id: C2
+    kinds: [decision_rule, technique]
+    keywords: [因利制权, 因敌制胜, 应变]
+    min_count: 1
+  - slot_id: C3
+    rubric_item_id: C3
+    kinds: [decision_rule, technique]
+    keywords: [造势, 任势, 以迂为直, 奇正相生]
+    min_count: 1
+  - slot_id: D1
+    rubric_item_id: D1
+    kinds: [case, decision_rule, technique]
+    keywords: [场景, 案例, 我方, 敌军, 应对]
+    min_count: 1
+  - slot_id: E1
+    rubric_item_id: E1
+    kinds: [anti_pattern, principle]
+    keywords: [道德, 慎战, 不滥用, 伦理, 边界]
+    min_count: 1
+  - slot_id: F1
+    rubric_item_id: F1
+    kinds: [term, framework]
+    keywords: [术语, 定义, 概念]
+    min_count: 1
+  - slot_id: CASE-SZ-01
+    rubric_item_id: CASE-SZ-01
+    kinds: [case, decision_rule, technique]
+    keywords: [场景, 方案, 应对]
+    min_count: 1
+  - slot_id: CASE-SZ-02
+    rubric_item_id: CASE-SZ-02
+    kinds: [case, decision_rule, technique]
+    keywords: [场景, 方案, 应对]
+    min_count: 1

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, Literal
 
 from book2skill.domain import TextBlock
 from book2skill.llm.chunking import ChunkItem
@@ -57,12 +57,14 @@ class OpenAIAdapter:
         base_url: str | None = None,
         temperature: float = 0.2,
         request_timeout_seconds: float = 30.0,
+        locale: Literal["zh-CN", "en"] = "zh-CN",
     ) -> None:
         self._model = model
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self._base_url = base_url
         self._temperature = temperature
         self._request_timeout_seconds = request_timeout_seconds
+        self._locale = locale
         self._client = self._build_client()
 
     def _build_client(self) -> Any:
@@ -77,7 +79,10 @@ class OpenAIAdapter:
             from openai import OpenAI
         except ImportError:
             return None
-        kwargs: dict[str, Any] = {"api_key": self._api_key}
+        # RuntimeLLMAdapter owns rate limiting, retry budget, cache and audit
+        # events. Disable the SDK's opaque retry loop so a single configured
+        # timeout cannot silently multiply into minutes of unreported waiting.
+        kwargs: dict[str, Any] = {"api_key": self._api_key, "max_retries": 0}
         if self._base_url:
             kwargs["base_url"] = self._base_url
         try:
@@ -100,7 +105,7 @@ class OpenAIAdapter:
         """Detect document structure via the configured real provider."""
         self._require_available()
 
-        prompt = _build_structure_prompt(source_id, blocks)
+        prompt = _build_structure_prompt(source_id, blocks, self._locale)
         raw = self._chat(prompt)
         parsed = _parse_required_json_array(raw)
         normalized = [_normalize_structure(e) for e in parsed]
@@ -111,7 +116,7 @@ class OpenAIAdapter:
     ) -> dict[str, list[dict[str, object]]]:
         """Analyze one bounded chunk with a combined response contract."""
         self._require_available()
-        raw = self._chat(_build_chunk_prompt(source_id, items))
+        raw = self._chat(_build_chunk_prompt(source_id, items, self._locale))
         payload = _parse_required_json_object(raw)
         structure = payload.get("structure", [])
         candidates = payload.get("candidates", [])
@@ -132,7 +137,7 @@ class OpenAIAdapter:
         """Extract candidate knowledge units via the configured provider."""
         self._require_available()
 
-        prompt = _build_candidates_prompt(source_id, blocks)
+        prompt = _build_candidates_prompt(source_id, blocks, self._locale)
         raw = self._chat(prompt)
         parsed = _parse_required_json_array(raw)
         normalized = [_normalize_candidate(e) for e in parsed]
@@ -146,11 +151,50 @@ class OpenAIAdapter:
         """Propose skill shapes via the configured real provider."""
         self._require_available()
 
-        prompt = _build_skills_prompt(source_id, candidates)
+        prompt = _build_skills_prompt(source_id, candidates, self._locale)
         raw = self._chat(prompt)
         parsed = _parse_required_json_array(raw)
         normalized = [_normalize_skill(e) for e in parsed]
         return normalized
+
+    def synthesize_candidates(
+        self,
+        source_id: str,
+        level: str,
+        candidates: list[dict[str, object]],
+        structure: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        """Consolidate source-linked evidence cards into executable units.
+
+        ``structure`` optionally carries the source's detected section headings
+        (StructureEntry-compatible dicts), injected as organizing anchors so the
+        reducer aligns units to the real book structure.
+        """
+        self._require_available()
+        raw = self._chat(
+            _build_synthesis_prompt(
+                source_id, level, candidates, structure, self._locale
+            )
+        )
+        payload = _parse_required_json_object(raw)
+        entries = payload.get("candidates", [])
+        if not isinstance(entries, list) or any(
+            not isinstance(item, dict) for item in entries
+        ):
+            raise LLMResponseError("LLM synthesis response candidates are invalid")
+        return [_normalize_synthesis_candidate(dict(item)) for item in entries]
+
+    def review_evidence(self, card: dict[str, object]) -> dict[str, object]:
+        """Ask the model to review one evidence card and return a review patch.
+
+        The reviewer must return a JSON object with ``disposition``,
+        ``revised_content`` (for ``merge``), ``rationale`` and ``source_refs``
+        that are a subset of the card's refs. The runtime quality layer
+        validates source-replayability after parsing.
+        """
+        self._require_available()
+        raw = self._chat(_build_review_prompt(card, self._locale))
+        return _parse_required_json_object(raw)
 
     # -- internals --------------------------------------------------------
 
@@ -174,7 +218,8 @@ class OpenAIAdapter:
                         "role": "system",
                         "content": (
                             "You are a knowledge-extraction assistant. "
-                            "Return ONLY a JSON array, no prose."
+                            "Return ONLY the JSON shape requested by the user, "
+                            "no prose."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -184,7 +229,16 @@ class OpenAIAdapter:
             )
             return resp.choices[0].message.content or ""
         except Exception as exc:
-            raise LLMRuntimeError("OpenAI-compatible request failed") from exc
+            # Keep the actionable exception class (timeout, connection, rate
+            # limit, etc.) without serialising provider messages, endpoint
+            # URLs, request bodies, or credentials into user diagnostics.
+            detail = type(exc).__name__
+            status_code = getattr(exc, "status_code", None)
+            if isinstance(status_code, int):
+                detail = f"{detail}, status={status_code}"
+            raise LLMRuntimeError(
+                f"OpenAI-compatible request failed ({detail})"
+            ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +246,18 @@ class OpenAIAdapter:
 # ---------------------------------------------------------------------------
 
 
+def _language_instruction(locale: Literal["zh-CN", "en"]) -> str:
+    """Return the content-language directive for the configured locale."""
+    if locale == "en":
+        return "Respond strictly in English. All generated content must be English."
+    return (
+        "Respond strictly in Simplified Chinese (zh-CN). All generated content "
+        "and every emitted text field must be written in Chinese."
+    )
+
+
 def _build_structure_prompt(
-    source_id: str, blocks: list[TextBlock]
+    source_id: str, blocks: list[TextBlock], locale: Literal["zh-CN", "en"] = "zh-CN"
 ) -> str:
     """Build the prompt for structure detection."""
     text = "\n\n".join(
@@ -209,12 +273,12 @@ def _build_structure_prompt(
         "- heading: string\n"
         "- level: integer 1-6\n"
         "- text_preview: string\n\n"
-        f"{text}"
+        f"{text}\n\n{_language_instruction(locale)}"
     )
 
 
 def _build_candidates_prompt(
-    source_id: str, blocks: list[TextBlock]
+    source_id: str, blocks: list[TextBlock], locale: Literal["zh-CN", "en"] = "zh-CN"
 ) -> str:
     """Build the prompt for candidate extraction."""
     text = "\n\n".join(
@@ -235,11 +299,13 @@ def _build_candidates_prompt(
         "'candidate'|'reviewed'|'approved'|'rejected'|'superseded' "
         "(use 'candidate' for new units)\n"
         "- record_version: integer (use 1 for new units)\n\n"
-        f"{text}"
+        f"{text}\n\n{_language_instruction(locale)}"
     )
 
 
-def _build_chunk_prompt(source_id: str, items: list[ChunkItem]) -> str:
+def _build_chunk_prompt(
+    source_id: str, items: list[ChunkItem], locale: Literal["zh-CN", "en"] = "zh-CN"
+) -> str:
     """Build one bounded structure-and-candidate request with neighbour context."""
     records = []
     for item in items:
@@ -257,12 +323,114 @@ def _build_chunk_prompt(source_id: str, items: list[ChunkItem]) -> str:
         "object with arrays 'structure' and 'candidates'. Every item MUST carry "
         "input_id copied exactly from the input. Structure items need heading, "
         "level (1-6), text_preview; candidate items need kind, content, confidence "
-        "(0-1), review_status='candidate'. Context is for interpretation only; do "
-        "not cite it as an item.\n\n"
+        "(0-1), review_status='candidate'. Candidate content MUST be a concise, "
+        "original-language paraphrase of one actionable idea: state the trigger or "
+        "context, the recommended action, and the intended outcome when available. "
+        "Do not copy source passages, do not repeat source wording, and never emit "
+        "more than 20 consecutive CJK characters or 8 consecutive English words "
+        "from the input. For process-oriented material, preserve order, state "
+        "changes, decision rules, exceptions, records, and review loops as separate "
+        "candidates instead of a generic summary. Context is for interpretation only; "
+        "do not cite it as an item. Return at most 8 candidates for this entire "
+        "chunk and at most 2 candidates for any one input_id; omit duplicates, "
+        "bookkeeping, and weak restatements.\n\n"
         + json.dumps(records, ensure_ascii=False, separators=(",", ":"))
+        + f"\n\n{_language_instruction(locale)}"
     )
+
+
+def _build_synthesis_prompt(
+    source_id: str,
+    level: str,
+    candidates: list[dict[str, object]],
+    structure: list[dict[str, object]] | None = None,
+    locale: Literal["zh-CN", "en"] = "zh-CN",
+) -> str:
+    """Build the bounded reduce prompt without resending book text."""
+    if level not in {"chapter", "book"}:
+        raise ValueError("synthesis level must be 'chapter' or 'book'")
+    scope = "one bounded book section" if level == "chapter" else "the whole book"
+    count = "4 to 8" if level == "chapter" else "8 to 16"
+    anchors = _render_heading_anchors(structure)
+    return (
+        f"Synthesize evidence cards for {scope} from source '{source_id}'. "
+        "Return ONLY a JSON object with a 'candidates' array. Produce "
+        f"{count} high-value, non-duplicated, executable units when evidence "
+        "permits. Every item must contain: kind (framework|principle|technique|"
+        "anti_pattern|checklist|decision_rule|case|term), content (an original "
+        "language paraphrase), confidence (0-1), source_unit_ids (one or more "
+        "unit_id values copied exactly from the input), conditions (array), and "
+        "exceptions (array). For method books, make the workflow explicit: "
+        "trigger, ordered action, state change or record, exception/interruption "
+        "handling, and review/feedback loop where evidenced. Align units to the "
+        "source's real section headings when provided. Do not invent steps, "
+        "do not quote source wording, and do not return generic principles.\n\n"
+        + anchors
+        + json.dumps(candidates, ensure_ascii=False, separators=(",", ":"))
+        + f"\n\n{_language_instruction(locale)}"
+    )
+
+
+#: Cap on heading anchors injected into a synthesis prompt. Beyond this the
+#: ordering signal still helps but the token cost stops being worth it.
+_MAX_HEADING_ANCHORS = 32
+
+
+def _render_heading_anchors(
+    structure: list[dict[str, object]] | None,
+) -> str:
+    """Render a compact, ordered heading-anchor block, or ``""`` when empty."""
+    headings: list[str] = []
+    seen: set[str] = set()
+    for entry in structure or []:
+        heading = entry.get("heading")
+        if not isinstance(heading, str) or not heading.strip():
+            continue
+        stripped = heading.strip()
+        if stripped in seen:
+            continue
+        seen.add(stripped)
+        headings.append(stripped)
+        if len(headings) >= _MAX_HEADING_ANCHORS:
+            break
+    if not headings:
+        return ""
+    lines = [
+        "Source section headings (use as organizing anchors, in source order):"
+    ]
+    lines += [f"{i}. {h}" for i, h in enumerate(headings, start=1)]
+    return "\n".join(lines) + "\n"
+
+
+def _build_review_prompt(
+    card: dict[str, object], locale: Literal["zh-CN", "en"] = "zh-CN"
+) -> str:
+    """Build the Critic/Arbiter prompt for one evidence card.
+
+    The card is anonymized (no model identity, prompt or endpoint). The model
+    must return a JSON object whose ``source_refs`` are a subset of the card's
+    refs so the runtime can enforce source-replayability.
+    """
+    card_json = json.dumps(card, ensure_ascii=False, indent=2)
+    return (
+        "Review the following evidence card. Decide whether the extracted "
+        "knowledge unit is accurate, faithful to the cited source, and "
+        "executable. Return ONLY a JSON object with: disposition "
+        "('accept' | 'reject' | 'merge'), revised_content (a concise, "
+        "source-faithful paraphrase; required when disposition is 'merge'), "
+        "rationale (why), and source_refs (an array of objects; every entry "
+        "MUST be copied exactly from the input card's source_refs). Do not "
+        "invent source references, do not quote source wording, do not expand "
+        "content beyond the evidence.\n\n"
+        + card_json
+        + f"\n\n{_language_instruction(locale)}"
+    )
+
+
 def _build_skills_prompt(
-    source_id: str, candidates: list[dict[str, object]]
+    source_id: str,
+    candidates: list[dict[str, object]],
+    locale: Literal["zh-CN", "en"] = "zh-CN",
 ) -> str:
     """Build the prompt for skill suggestions."""
     cands_json = json.dumps(candidates, ensure_ascii=False, indent=2)
@@ -271,7 +439,7 @@ def _build_skills_prompt(
         f"'{source_id}', propose one or more Agent Skill shapes. "
         "Return a JSON array where each element has: name (lowercase-kebab), "
         "description, rationale.\n\n"
-        f"{cands_json}"
+        f"{cands_json}\n\n{_language_instruction(locale)}"
     )
 
 
@@ -398,6 +566,24 @@ def _normalize_candidate(entry: dict[str, object]) -> dict[str, object]:
     for field in ("unit_id", "kind", "content"):
         if not isinstance(entry.get(field), str):
             entry[field] = str(entry.get(field, ""))
+    return entry
+
+
+def _normalize_synthesis_candidate(entry: dict[str, object]) -> dict[str, object]:
+    """Coerce a reduce-stage candidate while retaining only trusted IDs later."""
+    entry["confidence"] = max(
+        0.0, min(1.0, _as_float(entry.get("confidence"), 0.5))
+    )
+    for field in ("kind", "content"):
+        if not isinstance(entry.get(field), str):
+            entry[field] = str(entry.get(field, ""))
+    for field in ("source_unit_ids", "conditions", "exceptions"):
+        value = entry.get(field)
+        entry[field] = (
+            [item for item in value if isinstance(item, str)]
+            if isinstance(value, list)
+            else []
+        )
     return entry
 
 

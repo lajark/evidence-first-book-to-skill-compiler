@@ -96,6 +96,17 @@ class TestMockLLMAdapter:
         adapter = MockLLMAdapter()
         assert adapter.suggest_skills("src1", []) == []
 
+    def test_synthesize_accepts_structure_without_changing_output(self) -> None:
+        adapter = MockLLMAdapter()
+        candidates = [
+            {"unit_id": "u1", "kind": "principle", "content": "A principle."}
+        ]
+        plain = adapter.synthesize_candidates("src1", "book", candidates)
+        grounded = adapter.synthesize_candidates(
+            "src1", "book", candidates, [{"heading": "第一章 准备"}]
+        )
+        assert grounded == plain
+
 
 # ---------------------------------------------------------------------------
 # AnalyzeUseCase end-to-end
@@ -127,6 +138,7 @@ class TestAnalyzeUseCase:
         assert {event.operation for event in bundle.analysis_run.invocations} == {
             "chunk",
             "skills",
+            "synthesis",
         }
         # Two extracted blocks are analysed in one bounded merged chunk instead
         # of issuing separate structure and candidate calls for every block.
@@ -392,6 +404,87 @@ class TestAnalyzeUseCase:
         assert structure.locator["kind"] == "paragraph"
         assert structure.locator["paragraph"] == 1
         assert structure.locator["page"] is None
+
+    def test_hierarchical_synthesis_keeps_only_trusted_source_refs(
+        self, tmp_path: Path
+    ) -> None:
+        class ReducingAdapter(MockLLMAdapter):
+            def synthesize_candidates(
+                self,
+                source_id: str,
+                level: str,
+                candidates: list[dict[str, object]],
+                structure: list[dict[str, object]] | None = None,
+            ) -> list[dict[str, object]]:
+                del structure
+                return [
+                    {
+                        "kind": "framework",
+                        "content": f"{level} workflow assembled from evidence.",
+                        "confidence": 0.9,
+                        "source_unit_ids": [
+                            str(candidates[0]["unit_id"]),
+                            "model-invented-unit",
+                        ],
+                        "conditions": ["When a task is ready."],
+                        "exceptions": ["When interrupted."],
+                    }
+                ]
+
+        source = _write_txt(
+            tmp_path / "book.txt",
+            "# Start\n\nUse a timer to start.\n\n# Review\n\nReview the result.",
+        )
+        result = AnalyzeUseCase(llm=ReducingAdapter()).execute([str(source)])
+
+        assert result.bundle is not None
+        candidates = result.bundle.candidate_units
+        assert len(candidates) == 1
+        assert candidates[0].content == "book workflow assembled from evidence."
+        assert candidates[0].conditions == ["When a task is ready."]
+        assert candidates[0].exceptions == ["When interrupted."]
+        assert len(candidates[0].source_refs) == 1
+        assert candidates[0].source_refs[0]["block_id"] != "model-invented-unit"
+
+    def test_hierarchical_synthesis_receives_detected_structure(
+        self, tmp_path: Path
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        class GroundingAdapter(MockLLMAdapter):
+            def synthesize_candidates(
+                self,
+                source_id: str,
+                level: str,
+                candidates: list[dict[str, object]],
+                structure: list[dict[str, object]] | None = None,
+            ) -> list[dict[str, object]]:
+                captured["structure"] = structure
+                return [
+                    {
+                        "kind": "framework",
+                        "content": f"{level} grounded workflow.",
+                        "confidence": 0.9,
+                        "source_unit_ids": [str(candidates[0]["unit_id"])],
+                        "conditions": [],
+                        "exceptions": [],
+                    }
+                ]
+
+        source = _write_txt(
+            tmp_path / "book.txt",
+            "# 第一章 准备\n\n准备计时器。\n\n# 第二章 执行\n\n执行任务。",
+        )
+        result = AnalyzeUseCase(llm=GroundingAdapter()).execute([str(source)])
+
+        assert result.bundle is not None
+        structure = captured.get("structure")
+        assert structure is not None
+        headings = [
+            entry.get("heading") for entry in structure if isinstance(entry, dict)
+        ]
+        assert "第一章 准备" in headings
+        assert "第二章 执行" in headings
 
 
 # ---------------------------------------------------------------------------

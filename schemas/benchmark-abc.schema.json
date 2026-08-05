@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "benchmark-abc.schema.json",
+  "title": "BenchmarkAbcMeasurement",
+  "description": "Redacted A/B/C benchmark measurement for one (book, strategy) run (OPT-P1-11). No API keys, endpoints, prompts or source text are recorded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "book_id",
+    "strategy",
+    "wall_time_s",
+    "block_count",
+    "output_quality",
+    "llm"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "book_id": {"type": "string", "minLength": 1},
+    "strategy": {"enum": ["single", "balanced", "quality"]},
+    "wall_time_s": {"type": "number", "minimum": 0},
+    "block_count": {"type": "integer", "minimum": 0},
+    "output_quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_count", "source_reference_coverage"],
+      "properties": {
+        "candidate_count": {"type": "integer", "minimum": 0},
+        "supported_candidate_count": {"type": "integer", "minimum": 0},
+        "source_reference_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "duplicate_candidate_id_count": {"type": "integer", "minimum": 0},
+        "benchmark_slot_coverage": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "benchmark_slot_gaps": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call_count"],
+      "properties": {
+        "call_count": {"type": "integer", "minimum": 0},
+        "cache_hit_count": {"type": "integer", "minimum": 0},
+        "retry_count": {"type": "integer", "minimum": 0},
+        "failure_count": {"type": "integer", "minimum": 0},
+        "fallback_count": {"type": "integer", "minimum": 0},
+        "input_tokens_estimate": {"type": "integer", "minimum": 0},
+        "cost_estimate": {"type": "number", "minimum": 0},
+        "calls_by_operation": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "calls_by_profile_id": {"type": "object", "additionalProperties": {"type": "integer"}}
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flags_count", "review_patch_count"],
+      "properties": {
+        "flags_count": {"type": "integer", "minimum": 0},
+        "review_patch_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "profile_ids_used": {"type": "array", "items": {"type": "string"}},
+    "benchmark_score": {"type": ["number", "null"]},
+    "source_error": {"type": ["string", "null"]},
+    "notes": {"type": "string"}
+  }
+}

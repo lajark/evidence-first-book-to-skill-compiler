@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "llm-profiles.schema.json",
+  "title": "ProviderProfileSet",
+  "description": "Versioned collection of OpenAI-compatible LLM provider profiles. Credentials are referenced by environment-variable name only; a credential value must never appear in this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profiles", "default_profile"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "default_profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/ProviderProfile"}
+    }
+  },
+  "$defs": {
+    "ProviderProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "provider",
+        "model",
+        "api_key_env",
+        "roles"
+      ],
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "minLength": 1
+        },
+        "provider": {"enum": ["mock", "openai"]},
+        "model": {"type": "string", "minLength": 1},
+        "base_url": {"type": ["string", "null"]},
+        "api_key_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "minLength": 1,
+          "description": "NAME of the environment variable holding the credential; never the credential itself."
+        },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "map",
+              "section_reduce",
+              "book_reduce",
+              "synthesis",
+              "skill",
+              "critic",
+              "arbiter"
+            ]
+          }
+        },
+        "max_concurrent_requests": {"type": "integer", "minimum": 1},
+        "requests_per_minute": {"type": "integer", "minimum": 1},
+        "tokens_per_minute": {"type": ["integer", "null"], "minimum": 1},
+        "request_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "max_retries": {"type": "integer", "minimum": 0},
+        "circuit_failure_threshold": {"type": "integer", "minimum": 1},
+        "cost_per_million_input_tokens": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "cost_per_million_output_tokens": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "data_send_policy": {
+          "enum": ["original_text_allowed", "evidence_cards_only", "no_send"]
+        },
+        "allowed_material_categories": {
+          "type": ["array", "null"],
+          "items": {
+            "enum": [
+              "licensed_book",
+              "internal_doc",
+              "public_doc",
+              "user_provided"
+            ]
+          }
+        },
+        "locale": {"enum": ["zh-CN", "en", null]}
+      }
+    }
+  }
+}

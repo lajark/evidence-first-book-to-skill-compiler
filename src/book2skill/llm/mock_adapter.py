@@ -8,6 +8,7 @@ adapter lets the Analyze pipeline run end-to-end without a model endpoint.
 from __future__ import annotations
 
 import hashlib
+from typing import Literal
 
 from book2skill.domain import TextBlock, derive_block_id, derive_candidate_unit_id
 from book2skill.llm.chunking import ChunkItem
@@ -122,6 +123,58 @@ class MockLLMAdapter:
                 "rationale": "Auto-suggested by the mock adapter; review before build.",
             }
         ]
+
+    def synthesize_candidates(
+        self,
+        source_id: str,
+        level: Literal["chapter", "book"],
+        candidates: list[dict[str, object]],
+        structure: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        """Deterministically retain a bounded, source-linked evidence set.
+
+        The mock cannot invent a true abstraction.  It still mirrors the
+        reduce contract so the complete hierarchy, provenance mapping, and
+        interruption-resume cache are testable without a cloud provider.
+        ``structure`` is accepted for protocol compatibility and ignored.
+        """
+        del structure
+        limit = 8 if level == "chapter" else 16
+        result: list[dict[str, object]] = []
+        for candidate in candidates:
+            unit_id = candidate.get("unit_id")
+            content = candidate.get("content")
+            kind = candidate.get("kind")
+            if not isinstance(unit_id, str) or not isinstance(content, str):
+                continue
+            result.append(
+                {
+                    "kind": kind if isinstance(kind, str) else "technique",
+                    "content": content,
+                    "confidence": candidate.get("confidence", 0.5),
+                    "source_unit_ids": [unit_id],
+                    "conditions": candidate.get("conditions", []),
+                    "exceptions": candidate.get("exceptions", []),
+                }
+            )
+            if len(result) >= limit:
+                break
+        return result
+
+    def review_evidence(self, card: dict[str, object]) -> dict[str, object]:
+        """Deterministically return a source-replayable merge review patch.
+
+        The mock cannot judge quality; it mirrors the Critic/Arbiter contract
+        so source-replayability, budget and authorization are testable offline.
+        It keeps the card's content and source refs, so the patch always
+        replays to the reviewed unit.
+        """
+        return {
+            "disposition": "merge",
+            "revised_content": card.get("content", ""),
+            "rationale": "deterministic mock review (offline)",
+            "source_refs": card.get("source_refs", []),
+        }
 
 
 # ---------------------------------------------------------------------------

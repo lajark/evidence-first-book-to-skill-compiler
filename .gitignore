@@ -18,10 +18,12 @@ htmlcov/
 .env.*
 !.env.example
 config.local.*
+llm-profiles.local.*
 secrets/
 
 # Copyright/personal data
 workspace/
+output/
 library/raw/
 *.pdf
 *.epub

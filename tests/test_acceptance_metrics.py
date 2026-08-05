@@ -68,4 +68,7 @@ def test_benchmark_case_records_required_pipeline_metrics() -> None:
     assert measurement["peak_rss_bytes"] > 0
     assert measurement["source_read_operations"]["logical_full_reads"] == 3
     assert measurement["llm"]["call_count"] >= 2
+    # Chapter→book reduce caps the evidence set (mock: 8/chapter), so 10
+    # source blocks collapse to 8 sourced candidates with full provenance.
+    assert measurement["output_quality"]["candidate_count"] == 8
     assert measurement["output_quality"]["source_reference_coverage"] == 1.0

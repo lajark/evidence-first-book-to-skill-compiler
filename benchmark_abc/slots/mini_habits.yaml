@@ -1,0 +1,95 @@
+# 微习惯 (L3) benchmark-slot expectations.
+# Heuristic coverage proxies for Skill提炼质量评估基准/03_微习惯_Skill提炼质量评估基准.md.
+schema_version: 1
+book_id: mini_habits
+slots:
+  - slot_id: A1
+    rubric_item_id: A1
+    kinds: [principle, framework]
+    keywords: [微习惯, 小到不可失败, 几乎不可能失败, 最小行动]
+    min_count: 1
+  - slot_id: A2
+    rubric_item_id: A2
+    kinds: [principle, framework]
+    keywords: [意志力, 动机, 大脑, 基底节, 重复]
+    min_count: 1
+  - slot_id: A3
+    rubric_item_id: A3
+    kinds: [principle, decision_rule]
+    keywords: [最低要求, 额外完成, 超额, 允许, 上限]
+    min_count: 1
+  - slot_id: A4
+    rubric_item_id: A4
+    kinds: [principle, framework]
+    keywords: [自我效能, 成功, 反馈, 建立习惯]
+    min_count: 1
+  - slot_id: B1
+    rubric_item_id: B1
+    kinds: [principle, framework]
+    keywords: [动机不稳定, 意志力有限, 为什么, 机制]
+    min_count: 1
+  - slot_id: C1
+    rubric_item_id: C1
+    kinds: [checklist, technique]
+    keywords: [选择, 步骤一, 第一步, 选择习惯]
+    min_count: 1
+  - slot_id: C2
+    rubric_item_id: C2
+    kinds: [checklist, technique]
+    keywords: [缩小, 步骤二, 第二步, 缩小]
+    min_count: 1
+  - slot_id: C3
+    rubric_item_id: C3
+    kinds: [checklist, technique]
+    keywords: [步骤三, 第三步, 确定, 用时]
+    min_count: 1
+  - slot_id: C4
+    rubric_item_id: C4
+    kinds: [checklist, technique]
+    keywords: [步骤四, 第四步, 记录, 方式]
+    min_count: 1
+  - slot_id: C5
+    rubric_item_id: C5
+    kinds: [checklist, technique]
+    keywords: [步骤五, 第五步, 宗旨, 建立]
+    min_count: 1
+  - slot_id: C6
+    rubric_item_id: C6
+    kinds: [checklist, technique]
+    keywords: [步骤六, 第六步, 奖励, 回报]
+    min_count: 1
+  - slot_id: C7
+    rubric_item_id: C7
+    kinds: [checklist, technique]
+    keywords: [步骤七, 第七步, 记录, 完成]
+    min_count: 1
+  - slot_id: C8
+    rubric_item_id: C8
+    kinds: [checklist, technique]
+    keywords: [步骤八, 第八步, 判断, 超额, 拒绝]
+    min_count: 1
+  - slot_id: D1
+    rubric_item_id: D1
+    kinds: [decision_rule, principle]
+    keywords: [规则, 禁止, 不要, 骄傲, 超额限制]
+    min_count: 1
+  - slot_id: D2
+    rubric_item_id: D2
+    kinds: [decision_rule, principle]
+    keywords: [最低标准, 额外, 保持, 不提高]
+    min_count: 1
+  - slot_id: E1
+    rubric_item_id: E1
+    kinds: [case, decision_rule, technique]
+    keywords: [场景, 案例, 诊断, 应对]
+    min_count: 1
+  - slot_id: F1
+    rubric_item_id: F1
+    kinds: [term, framework]
+    keywords: [术语, 定义, 概念]
+    min_count: 1
+  - slot_id: CASE-MH-01
+    rubric_item_id: CASE-MH-01
+    kinds: [case, decision_rule, technique]
+    keywords: [场景, 方案, 应对]
+    min_count: 1

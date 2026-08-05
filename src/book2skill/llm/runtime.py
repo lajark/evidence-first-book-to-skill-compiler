@@ -15,20 +15,50 @@ import os
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
+from queue import Empty, SimpleQueue
 from typing import Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from book2skill.config import Locale, resolve_locale
 from book2skill.domain import TextBlock
-from book2skill.llm.chunking import ChunkItem
+from book2skill.llm.chunking import ChunkItem, estimate_tokens
+from book2skill.llm.performance import (
+    ChunkTimingHistory,
+    ChunkTimingSample,
+    EtaEstimate,
+    TimingOperation,
+    estimate_eta,
+)
 from book2skill.llm.ports import LLMAdapter
 
 Provider = Literal["mock", "openai"]
 InvocationOutcome = Literal["success", "fallback", "error"]
+ChunkStatus = Literal[
+    "running", "cached", "rate_limited", "retrying", "failed", "fallback"
+]
+
+# Routing-strategy version included in cache scope so multi-channel routing
+# (OPT-P1-09) can invalidate caches without changing profile content. The
+# single-channel path keeps this default; a future router bumps it when its
+# selection semantics change in a way that must invalidate prior caches.
+ROUTING_STRATEGY_VERSION = "single-v1"
+
+
+@dataclass(frozen=True)
+class ChunkProgressEvent:
+    """A redacted runtime-status update for one scheduled LLM chunk."""
+
+    index: int
+    status: ChunkStatus
+    attempt: int = 0
+    wait_seconds: float = 0.0
+    elapsed_seconds: float = 0.0
+    heartbeat: bool = False
 
 
 class LLMRuntimeError(RuntimeError):
@@ -53,14 +83,22 @@ class LLMRuntimeConfig:
     api_key: str | None = field(default=None, repr=False, compare=False)
     allow_fallback: bool = False
     temperature: float = 0.2
-    prompt_version: str = "analysis-v1"
-    response_schema_version: str = "analysis-response-v1"
+    prompt_version: str = "analysis-v4"
+    response_schema_version: str = "analysis-response-v2"
     locale: Locale = "zh-CN"
     max_retries: int = 2
     circuit_failure_threshold: int = 3
-    max_concurrent_requests: int = 4
-    requests_per_minute: int = 60
+    max_concurrent_requests: int = 2
+    requests_per_minute: int = 15
     request_timeout_seconds: float = 30.0
+    # Profile/routing provenance. ``profile_id`` identifies the channel a
+    # run was routed to (None for the legacy single-provider path); the
+    # routing strategy version namespaces the content cache so multi-channel
+    # routing (OPT-P1-09) cannot reuse results across profiles/strategies.
+    # ``data_send_policy`` is the redacted profile policy recorded for audit.
+    profile_id: str | None = None
+    routing_strategy_version: str = ROUTING_STRATEGY_VERSION
+    data_send_policy: str | None = None
 
     def __post_init__(self) -> None:
         if not self.model.strip():
@@ -92,7 +130,9 @@ class LLMInvocation(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    operation: Literal["structure", "candidates", "skills", "chunk"]
+    operation: Literal[
+        "structure", "candidates", "skills", "chunk", "synthesis", "review"
+    ]
     outcome: InvocationOutcome
     provider: Provider
     model: str
@@ -102,6 +142,9 @@ class LLMInvocation(BaseModel):
     reason: str | None = None
     response_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     response_items: int | None = Field(default=None, ge=0)
+    # Channel that served this invocation (None for the single-provider path).
+    # Redacted identifier only; never a credential or endpoint secret.
+    profile_id: str | None = None
 
 
 class AnalysisRunManifest(BaseModel):
@@ -118,18 +161,32 @@ class AnalysisRunManifest(BaseModel):
     parameters: dict[str, float | int | str | bool]
     fallback_allowed: bool
     invocations: list[LLMInvocation] = Field(default_factory=list)
+    # Redacted profile/routing provenance. Optional so legacy manifests without
+    # these fields still validate; no credential, endpoint, prompt or text is
+    # ever recorded here.
+    profile_id: str | None = None
+    data_send_policy: str | None = None
 
 
 class RuntimeLLMAdapter:
     """Wrap a provider with explicit fallback policy and redacted auditing."""
 
     def __init__(
-        self, config: LLMRuntimeConfig, *, cache_root: Path | None = None
+        self,
+        config: LLMRuntimeConfig,
+        *,
+        cache_root: Path | None = None,
+        timing_history_path: Path | None = None,
     ) -> None:
         self._config = config
         self._invocations: list[LLMInvocation] = []
         self._consecutive_failures = 0
         self._cache_root = cache_root
+        history_path = timing_history_path or (
+            cache_root.parent / "performance-history.json" if cache_root else None
+        )
+        self._timing_history = ChunkTimingHistory(history_path)
+        self._timing_lock = threading.Lock()
         self._chunk_cache: dict[str, dict[str, list[dict[str, object]]]] = {}
         self._cache_lock = threading.Lock()
         self._invocation_lock = threading.Lock()
@@ -150,6 +207,7 @@ class RuntimeLLMAdapter:
                 base_url=config.base_url,
                 temperature=config.temperature,
                 request_timeout_seconds=config.request_timeout_seconds,
+                locale=config.locale,
             )
 
     @property
@@ -171,6 +229,8 @@ class RuntimeLLMAdapter:
             parameters=self._audit_parameters(),
             fallback_allowed=self._config.allow_fallback,
             invocations=invocations,
+            profile_id=self._config.profile_id,
+            data_send_policy=self._config.data_send_policy,
         )
 
     def start_run(self) -> None:
@@ -179,6 +239,39 @@ class RuntimeLLMAdapter:
             self._consecutive_failures = 0
         with self._invocation_lock:
             self._invocations.clear()
+    def estimate_chunk_eta(self, items: list[ChunkItem]) -> EtaEstimate | None:
+        """Predict one uncached chunk from matching history and this run."""
+        return self.estimate_input_eta(_chunk_input_tokens(items), operation="chunk")
+
+    def estimate_input_eta(
+        self,
+        input_tokens: int,
+        *,
+        operation: TimingOperation = "chunk",
+    ) -> EtaEstimate | None:
+        """Predict one real-model request, with a labelled cold-start prior."""
+        with self._timing_lock:
+            estimate = estimate_eta(
+                input_tokens, self._matching_timing_samples(operation)
+            )
+        if estimate is not None or self._config.provider != "openai":
+            return estimate
+        if input_tokens <= 0:
+            return None
+        point = min(
+            self._config.request_timeout_seconds * 0.8,
+            max(5.0, 4.0 + input_tokens / 40.0),
+        )
+        return EtaEstimate(
+            seconds=point,
+            lower_seconds=max(2.0, point * 0.5),
+            upper_seconds=max(
+                point * 2.0,
+                self._config.request_timeout_seconds
+                * (self._config.max_retries + 1),
+            ),
+            sample_count=0,
+        )
 
     def analyze_structure(
         self, source_id: str, blocks: list[TextBlock]
@@ -195,13 +288,163 @@ class RuntimeLLMAdapter:
     ) -> list[dict[str, object]]:
         return self._invoke("skills", source_id, candidates)
 
+    def suggest_skills_with_progress(
+        self,
+        source_id: str,
+        candidates: list[dict[str, object]],
+        *,
+        on_status: Callable[[ChunkProgressEvent], None] | None = None,
+    ) -> list[dict[str, object]]:
+        """Run the non-streaming skills request with caller-thread heartbeats."""
+        if self._config.provider == "mock":
+            return self.suggest_skills(source_id, candidates)
+        input_tokens = estimate_tokens(
+            json.dumps(candidates, ensure_ascii=False, separators=(",", ":"))
+        )
+        started = time.monotonic()
+        if on_status is not None:
+            on_status(ChunkProgressEvent(index=0, status="running", attempt=1))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(self.suggest_skills, source_id, candidates)
+            while True:
+                done, _ = wait({future}, timeout=0.25, return_when=FIRST_COMPLETED)
+                if done:
+                    break
+                if on_status is not None:
+                    on_status(
+                        ChunkProgressEvent(
+                            index=0,
+                            status="running",
+                            attempt=1,
+                            elapsed_seconds=time.monotonic() - started,
+                            heartbeat=True,
+                        )
+                    )
+            result = future.result()
+        self._record_input_timing(
+            input_tokens, time.monotonic() - started, operation="skills"
+        )
+        return result
+
+    def synthesize_candidates(
+        self,
+        source_id: str,
+        level: Literal["chapter", "book"],
+        candidates: list[dict[str, object]],
+        structure: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        """Consolidate bounded evidence cards with a persistent cache.
+
+        A synthesis request only contains prior candidate cards, never raw
+        source text.  A completed chapter reduction can therefore be reused
+        after interruption without resending a book chapter to the provider.
+
+        ``structure`` is an optional organizing anchor (detected section
+        headings) passed through to the provider; it is part of the cache
+        identity so a changed structure never reuses a stale reduction.
+        """
+        cache_key = self._synthesis_cache_key(
+            source_id, level, candidates, structure
+        )
+        cached = self._load_cached_synthesis(cache_key)
+        if cached is not None:
+            self._record("synthesis", "success", cached, "cache_hit")
+            return cached
+        input_tokens = max(
+            1,
+            estimate_tokens(
+                json.dumps(candidates, ensure_ascii=False, separators=(",", ":"))
+            ),
+        )
+        started = time.monotonic()
+        try:
+            result = self._retry_synthesis(source_id, level, candidates, structure)
+        except LLMRuntimeError as exc:
+            if self._config.provider == "openai" and self._config.allow_fallback:
+                result = self._dispatch_synthesis(
+                    self._fallback, source_id, level, candidates, structure
+                )
+                self._record("synthesis", "fallback", result, str(exc))
+                return result
+            self._record("synthesis", "error", None, str(exc))
+            raise
+        self._record_input_timing(
+            input_tokens, time.monotonic() - started, operation="synthesis"
+        )
+        self._store_cached_synthesis(cache_key, result)
+        self._record("synthesis", "success", result, None)
+        return result
+
+    def review_evidence(self, card: dict[str, object]) -> dict[str, object]:
+        """Run one Critic/Arbiter review of an evidence card.
+
+        Dispatches to the provider's ``review_evidence`` and records the
+        outcome. The card is already anonymized (no model identity, prompt,
+        endpoint or source text beyond the extracted content).
+        """
+        reviewer = cast("_ReviewAdapter", self._provider)
+        try:
+            result = reviewer.review_evidence(card)
+        except LLMRuntimeError as exc:
+            if self._config.provider == "openai" and self._config.allow_fallback:
+                result = cast("_ReviewAdapter", self._fallback).review_evidence(card)
+                self._record("review", "fallback", None, str(exc))
+                return result
+            self._record("review", "error", None, str(exc))
+            raise
+        # The review patch body lives in the bundle's quality_review; the audit
+        # records only the operation/outcome, never the reviewer's text.
+        self._record("review", "success", None, None)
+        return result
+
+    def _retry_synthesis(
+        self,
+        source_id: str,
+        level: Literal["chapter", "book"],
+        candidates: list[dict[str, object]],
+        structure: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        """Use the same start-rate budget and bounded retry policy as Map."""
+        last_error: LLMRuntimeError | None = None
+        for attempt in range(1, self._config.max_retries + 2):
+            delay = self._reserve_request_slot()
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                return self._dispatch_synthesis(
+                    self._provider, source_id, level, candidates, structure
+                )
+            except LLMRuntimeError as exc:
+                last_error = exc
+                if attempt <= self._config.max_retries:
+                    # Short exponential backoff with jitter prevents a cohort
+                    # of failed reductions from retrying in lockstep.
+                    time.sleep((2 ** (attempt - 1)) + (0.17 * attempt))
+        assert last_error is not None
+        raise last_error
+
     def analyze_chunk(
         self, source_id: str, items: list[ChunkItem], *, extractor_id: str = "unknown"
     ) -> dict[str, list[dict[str, object]]]:
         """Run one merged chunk request under the same fallback policy."""
+        return self._analyze_chunk(
+            source_id, items, extractor_id=extractor_id, on_status=None
+        )
+
+    def _analyze_chunk(
+        self,
+        source_id: str,
+        items: list[ChunkItem],
+        *,
+        extractor_id: str,
+        on_status: Callable[[ChunkStatus, int, float], None] | None,
+    ) -> dict[str, list[dict[str, object]]]:
+        """Run one chunk, optionally reporting redacted lifecycle statuses."""
         cache_key = self._cache_key(source_id, items, extractor_id)
         cached = self._load_cached_chunk(cache_key)
         if cached is not None:
+            if on_status is not None:
+                on_status("cached", 0, 0.0)
             self._record("chunk", "success", cached, "cache_hit")
             return cached
         with self._state_lock:
@@ -211,59 +454,186 @@ class RuntimeLLMAdapter:
             )
         if circuit_open:
             error = LLMRuntimeError("LLM circuit is open after consecutive failures")
+            if on_status is not None:
+                on_status("failed", 0, 0.0)
             self._record("chunk", "error", None, str(error))
             raise error
         try:
-            result = self._retry_chunk(source_id, items)
+            started = time.monotonic()
+            result = self._retry_chunk(source_id, items, on_status=on_status)
         except LLMRuntimeError as exc:
             with self._state_lock:
                 self._consecutive_failures += 1
             if self._config.provider == "openai" and self._config.allow_fallback:
+                if on_status is not None:
+                    on_status("fallback", 0, 0.0)
                 result = self._chunk_dispatch(self._fallback, source_id, items)
                 self._record("chunk", "fallback", result, str(exc))
                 return result
+            if on_status is not None:
+                on_status("failed", 0, 0.0)
             self._record("chunk", "error", None, str(exc))
             raise
         with self._state_lock:
             self._consecutive_failures = 0
+        self._record_chunk_timing(items, time.monotonic() - started)
         self._store_cached_chunk(cache_key, result)
         self._record("chunk", "success", result, None)
         return result
 
     def analyze_chunks(
-        self, requests: list[tuple[str, list[ChunkItem], str]]
+        self,
+        requests: list[tuple[str, list[ChunkItem], str]],
+        *,
+        on_completed: Callable[[int, int, int], None] | None = None,
+        on_status: Callable[[ChunkProgressEvent], None] | None = None,
     ) -> list[dict[str, list[dict[str, object]]]]:
         """Run deterministic chunk requests with bounded real-provider concurrency.
 
         Results retain input order even when requests finish out of order. The
         offline Mock is deliberately kept sequential: it is CPU-local and that
         preserves its audit ordering without sacrificing network throughput.
+        Both callbacks run on the scheduler's calling thread. ``on_completed``
+        follows each successful or cached result; retries and failed attempts
+        never advance the completed count. ``on_status`` carries only redacted
+        scheduling state, never source text or prompts.
         """
         if not requests:
             return []
-        if self._config.provider == "mock" or len(requests) == 1:
-            return [
-                self.analyze_chunk(source_id, items, extractor_id=extractor_id)
-                for source_id, items, extractor_id in requests
-            ]
+        total = len(requests)
+
+        def direct_status_reporter(
+            index: int,
+        ) -> Callable[[ChunkStatus, int, float], None] | None:
+            if on_status is None:
+                return None
+
+            def report(status: ChunkStatus, attempt: int, wait_seconds: float) -> None:
+                on_status(
+                    ChunkProgressEvent(
+                        index=index,
+                        status=status,
+                        attempt=attempt,
+                        wait_seconds=wait_seconds,
+                    )
+                )
+
+            return report
+
+        if self._config.provider == "mock":
+            sequential_results: list[dict[str, list[dict[str, object]]]] = []
+            for index, (source_id, items, extractor_id) in enumerate(requests):
+                sequential_results.append(
+                    self._analyze_chunk(
+                        source_id,
+                        items,
+                        extractor_id=extractor_id,
+                        on_status=direct_status_reporter(index),
+                    )
+                )
+                if on_completed is not None:
+                    on_completed(index + 1, total, index)
+            return sequential_results
 
         results: list[dict[str, list[dict[str, object]]] | None] = [None] * len(
             requests
         )
+        status_events: SimpleQueue[tuple[ChunkProgressEvent, float]] = SimpleQueue()
+
+        def publish_status(
+            index: int, status: ChunkStatus, attempt: int, wait_seconds: float
+        ) -> None:
+            status_events.put(
+                (
+                    ChunkProgressEvent(
+                        index=index,
+                        status=status,
+                        attempt=attempt,
+                        wait_seconds=wait_seconds,
+                    ),
+                    time.monotonic(),
+                )
+            )
+
+        def queued_status_reporter(
+            index: int,
+        ) -> Callable[[ChunkStatus, int, float], None]:
+            def report(status: ChunkStatus, attempt: int, wait_seconds: float) -> None:
+                publish_status(index, status, attempt, wait_seconds)
+
+            return report
+
+        active_requests: dict[int, tuple[int, float]] = {}
+        last_heartbeat: dict[int, float] = {}
+
+        def flush_status_events() -> None:
+            if on_status is None:
+                return
+            while True:
+                try:
+                    event, emitted_at = status_events.get_nowait()
+                except Empty:
+                    return
+                if event.status == "running":
+                    active_requests[event.index] = (event.attempt, emitted_at)
+                    last_heartbeat[event.index] = 0.0
+                elif event.status in {
+                    "cached",
+                    "rate_limited",
+                    "retrying",
+                    "failed",
+                    "fallback",
+                }:
+                    active_requests.pop(event.index, None)
+                on_status(event)
+
         with ThreadPoolExecutor(
-            max_workers=min(self._config.max_concurrent_requests, len(requests))
+            max_workers=min(self._config.max_concurrent_requests, total)
         ) as pool:
             futures = {
                 pool.submit(
-                    self.analyze_chunk,
+                    self._analyze_chunk,
                     source_id,
                     items,
                     extractor_id=extractor_id,
+                    on_status=queued_status_reporter(index),
                 ): index
                 for index, (source_id, items, extractor_id) in enumerate(requests)
             }
-            for future in as_completed(futures):
-                results[futures[future]] = future.result()
+            pending = set(futures)
+            completed = 0
+            while pending:
+                done, pending = wait(
+                    pending, timeout=0.1, return_when=FIRST_COMPLETED
+                )
+                flush_status_events()
+                now = time.monotonic()
+                if on_status is not None:
+                    pending_indices = {futures[future] for future in pending}
+                    for index, (attempt, started) in list(active_requests.items()):
+                        elapsed = now - started
+                        if (
+                            index in pending_indices
+                            and elapsed - last_heartbeat.get(index, 0.0) >= 0.25
+                        ):
+                            last_heartbeat[index] = elapsed
+                            on_status(
+                                ChunkProgressEvent(
+                                    index=index,
+                                    status="running",
+                                    attempt=attempt,
+                                    elapsed_seconds=elapsed,
+                                    heartbeat=True,
+                                )
+                            )
+                for future in done:
+                    index = futures[future]
+                    active_requests.pop(index, None)
+                    results[index] = future.result()
+                    completed += 1
+                    if on_completed is not None:
+                        on_completed(completed, total, index)
+            flush_status_events()
         return [result for result in results if result is not None]
 
     def _cache_key(
@@ -277,6 +647,9 @@ class RuntimeLLMAdapter:
             "prompt": self._config.prompt_version,
             "schema": self._config.response_schema_version,
             "temperature": self._config.temperature,
+            "profile_id": self._config.profile_id,
+            "routing_strategy": self._config.routing_strategy_version,
+            "locale": self._config.locale,
             "items": [
                 (item.input_id, item.source_block_id, item.text) for item in items
             ],
@@ -284,6 +657,76 @@ class RuntimeLLMAdapter:
         return hashlib.sha256(
             json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
+
+    def _synthesis_cache_key(
+        self,
+        source_id: str,
+        level: Literal["chapter", "book"],
+        candidates: list[dict[str, object]],
+        structure: list[dict[str, object]] | None = None,
+    ) -> str:
+        identity = {
+            "source_id": source_id,
+            "level": level,
+            "provider": self._config.provider,
+            "model": self._config.model,
+            "prompt": self._config.prompt_version,
+            "schema": self._config.response_schema_version,
+            "temperature": self._config.temperature,
+            "profile_id": self._config.profile_id,
+            "routing_strategy": self._config.routing_strategy_version,
+            "locale": self._config.locale,
+            "candidates": candidates,
+            "structure": structure,
+        }
+        return hashlib.sha256(
+            json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+    def _matching_timing_samples(
+        self, operation: TimingOperation
+    ) -> list[ChunkTimingSample]:
+        return self._timing_history.matching(
+            operation=operation,
+            provider=self._config.provider,
+            model=self._config.model,
+            runtime_scope=self._runtime_scope(),
+            prompt_version=self._config.prompt_version,
+            response_schema_version=self._config.response_schema_version,
+        )
+
+    def _record_chunk_timing(
+        self, items: list[ChunkItem], duration_seconds: float
+    ) -> None:
+        self._record_input_timing(
+            _chunk_input_tokens(items), duration_seconds, operation="chunk"
+        )
+
+    def _record_input_timing(
+        self,
+        input_tokens: int,
+        duration_seconds: float,
+        *,
+        operation: TimingOperation,
+    ) -> None:
+        sample = ChunkTimingSample(
+            operation=operation,
+            provider=self._config.provider,
+            model=self._config.model,
+            runtime_scope=self._runtime_scope(),
+            prompt_version=self._config.prompt_version,
+            response_schema_version=self._config.response_schema_version,
+            input_tokens=input_tokens,
+            duration_seconds=duration_seconds,
+        )
+        if not sample.is_valid():
+            return
+        with self._timing_lock:
+            self._timing_history.append(sample)
+
+    def _runtime_scope(self) -> str:
+        identity = self._config.base_url or self._config.provider
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     def _load_cached_chunk(
         self, cache_key: str
@@ -311,6 +754,22 @@ class RuntimeLLMAdapter:
             self._chunk_cache[cache_key] = result
         return result
 
+    def _load_cached_synthesis(
+        self, cache_key: str
+    ) -> list[dict[str, object]] | None:
+        if self._cache_root is None:
+            return None
+        path = self._cache_root / f"synthesis-{cache_key}.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(value, list) or any(
+            not isinstance(item, dict) for item in value
+        ):
+            return None
+        return [dict(item) for item in value]
+
     def _store_cached_chunk(
         self, cache_key: str, result: dict[str, list[dict[str, object]]]
     ) -> None:
@@ -324,31 +783,52 @@ class RuntimeLLMAdapter:
         temporary.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
         os.replace(temporary, target)
 
+    def _store_cached_synthesis(
+        self, cache_key: str, result: list[dict[str, object]]
+    ) -> None:
+        if self._cache_root is None:
+            return
+        self._cache_root.mkdir(parents=True, exist_ok=True)
+        target = self._cache_root / f"synthesis-{cache_key}.json"
+        temporary = target.with_name(f"{target.stem}.{uuid.uuid4().hex}.tmp")
+        temporary.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, target)
     def _retry_chunk(
-        self, source_id: str, items: list[ChunkItem]
+        self,
+        source_id: str,
+        items: list[ChunkItem],
+        *,
+        on_status: Callable[[ChunkStatus, int, float], None] | None,
     ) -> dict[str, list[dict[str, object]]]:
         last_error: LLMRuntimeError | None = None
-        for _ in range(self._config.max_retries + 1):
+        for attempt in range(1, self._config.max_retries + 2):
             try:
-                self._await_request_slot()
+                delay = self._reserve_request_slot()
+                if on_status is not None and delay > 0:
+                    on_status("rate_limited", attempt, delay)
+                if delay > 0:
+                    time.sleep(delay)
+                if on_status is not None:
+                    on_status("running", attempt, 0.0)
                 return self._chunk_dispatch(self._provider, source_id, items)
             except LLMRuntimeError as exc:
                 last_error = exc
+                if on_status is not None and attempt <= self._config.max_retries:
+                    on_status("retrying", attempt + 1, 0.0)
         assert last_error is not None
         raise last_error
 
-    def _await_request_slot(self) -> None:
-        """Serialize real-provider request starts to honour the configured rate."""
+    def _reserve_request_slot(self) -> float:
+        """Reserve a rate-limited request start and return its required delay."""
         if self._config.provider == "mock":
-            return
+            return 0.0
         interval = 60.0 / self._config.requests_per_minute
         with self._rate_lock:
             now = time.monotonic()
             scheduled = max(now, self._next_request_start)
             self._next_request_start = scheduled + interval
         delay = scheduled - now
-        if delay > 0:
-            time.sleep(delay)
+        return delay
 
     def _invoke(
         self,
@@ -356,17 +836,28 @@ class RuntimeLLMAdapter:
         source_id: str,
         payload: list[TextBlock] | list[dict[str, object]],
     ) -> list[dict[str, object]]:
-        try:
-            result = self._dispatch(self._provider, operation, source_id, payload)
-        except LLMRuntimeError as exc:
-            if self._config.provider == "openai" and self._config.allow_fallback:
-                result = self._dispatch(self._fallback, operation, source_id, payload)
-                self._record(operation, "fallback", result, str(exc))
+        # Retry transient failures (incl. malformed JSON) like the chunk path,
+        # reserving a rate-limited start slot per attempt, before fallback.
+        last_error: LLMRuntimeError | None = None
+        for _attempt in range(1, self._config.max_retries + 2):
+            try:
+                delay = self._reserve_request_slot()
+                if delay > 0:
+                    time.sleep(delay)
+                result = self._dispatch(
+                    self._provider, operation, source_id, payload
+                )
+                self._record(operation, "success", result, None)
                 return result
-            self._record(operation, "error", None, str(exc))
-            raise
-        self._record(operation, "success", result, None)
-        return result
+            except LLMRuntimeError as exc:
+                last_error = exc
+        assert last_error is not None
+        if self._config.provider == "openai" and self._config.allow_fallback:
+            result = self._dispatch(self._fallback, operation, source_id, payload)
+            self._record(operation, "fallback", result, str(last_error))
+            return result
+        self._record(operation, "error", None, str(last_error))
+        raise last_error
 
     @staticmethod
     def _dispatch(
@@ -388,9 +879,29 @@ class RuntimeLLMAdapter:
         chunk_adapter = cast("_ChunkAdapter", adapter)
         return chunk_adapter.analyze_chunk(source_id, items)
 
+    @staticmethod
+    def _dispatch_synthesis(
+        adapter: LLMAdapter,
+        source_id: str,
+        level: Literal["chapter", "book"],
+        candidates: list[dict[str, object]],
+        structure: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        method = getattr(adapter, "synthesize_candidates", None)
+        if not callable(method):
+            raise LLMRuntimeError("LLM adapter does not support hierarchical synthesis")
+        result = method(source_id, level, candidates, structure)
+        if not isinstance(result, list) or any(
+            not isinstance(item, dict) for item in result
+        ):
+            raise LLMResponseError("LLM synthesis response must be an array of objects")
+        return [dict(item) for item in result]
+
     def _record(
         self,
-        operation: Literal["structure", "candidates", "skills", "chunk"],
+        operation: Literal[
+        "structure", "candidates", "skills", "chunk", "synthesis", "review"
+    ],
         outcome: InvocationOutcome,
         response: list[dict[str, object]] | dict[str, list[dict[str, object]]] | None,
         reason: str | None,
@@ -428,6 +939,7 @@ class RuntimeLLMAdapter:
                         if response is not None
                         else None
                     ),
+                    profile_id=self._config.profile_id,
                 )
             )
 
@@ -499,11 +1011,11 @@ def resolve_runtime_config(
         locale=resolved_locale,
         max_concurrent_requests=int(
             parse_setting(
-                ("BOOK2SKILL_LLM_MAX_CONCURRENT_REQUESTS",), 4, int
+                ("BOOK2SKILL_LLM_MAX_CONCURRENT_REQUESTS",), 2, int
             )
         ),
         requests_per_minute=int(
-            parse_setting(("BOOK2SKILL_LLM_REQUESTS_PER_MINUTE",), 60, int)
+            parse_setting(("BOOK2SKILL_LLM_REQUESTS_PER_MINUTE",), 15, int)
         ),
         request_timeout_seconds=float(
             parse_setting(
@@ -514,10 +1026,34 @@ def resolve_runtime_config(
 
 
 def build_llm_adapter(
-    config: LLMRuntimeConfig, *, cache_root: Path | None = None
+    config: LLMRuntimeConfig,
+    *,
+    cache_root: Path | None = None,
+    timing_history_path: Path | None = None,
 ) -> RuntimeLLMAdapter:
     """Construct the only production adapter path from a resolved config."""
-    return RuntimeLLMAdapter(config, cache_root=cache_root)
+    return RuntimeLLMAdapter(
+        config,
+        cache_root=cache_root,
+        timing_history_path=timing_history_path,
+    )
+
+
+def default_timing_history_path(
+    environment: dict[str, str] | None = None,
+) -> Path:
+    """Return a platform-local path for redacted performance observations."""
+    shell = environment if environment is not None else dict(os.environ)
+    configured = shell.get("BOOK2SKILL_CACHE_HOME")
+    if configured:
+        return Path(configured).expanduser() / "performance-history.json"
+    if shell.get("LOCALAPPDATA"):
+        root = Path(shell["LOCALAPPDATA"])
+    elif shell.get("XDG_CACHE_HOME"):
+        root = Path(shell["XDG_CACHE_HOME"])
+    else:
+        root = Path.home() / ".cache"
+    return root / "book2skill" / "performance-history.json"
 
 
 class _ChunkAdapter(Protocol):
@@ -529,6 +1065,23 @@ class _ChunkAdapter(Protocol):
         ...
 
 
+class _ReviewAdapter(Protocol):
+    """Private protocol for the optional Critic/Arbiter review capability."""
+
+    def review_evidence(self, card: dict[str, object]) -> dict[str, object]:
+        ...
+
+
+def _chunk_input_tokens(items: list[ChunkItem]) -> int:
+    """Estimate the complete prompt input carried by one analysis chunk."""
+    return sum(
+        estimate_tokens(item.text)
+        + estimate_tokens(item.context_before)
+        + estimate_tokens(item.context_after)
+        for item in items
+    )
+
+
 __all__ = [
     "AnalysisRunManifest",
     "LLMInvocation",
@@ -538,5 +1091,6 @@ __all__ = [
     "LLMUnavailableError",
     "RuntimeLLMAdapter",
     "build_llm_adapter",
+    "default_timing_history_path",
     "resolve_runtime_config",
 ]

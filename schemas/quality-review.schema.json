@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "quality-review.schema.json",
+  "title": "ReviewPatch",
+  "description": "A source-replayable review decision for one candidate unit (OPT-P1-10). source_refs must be a subset of the reviewed unit's original refs; model_id is a redacted identifier.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["unit_id", "disposition", "rationale", "model_id"],
+  "properties": {
+    "unit_id": {"type": "string", "minLength": 1},
+    "disposition": {"enum": ["accept", "reject", "merge"]},
+    "revised_content": {"type": ["string", "null"]},
+    "rationale": {"type": "string"},
+    "source_refs": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "model_id": {"type": "string", "minLength": 1}
+  }
+}

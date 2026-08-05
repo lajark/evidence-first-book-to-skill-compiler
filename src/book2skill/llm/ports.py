@@ -7,7 +7,7 @@ offline with a rule-based mock (M1) or against an OpenAI-compatible endpoint
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Literal, Protocol
 
 from book2skill.domain import TextBlock
 
@@ -48,4 +48,29 @@ class LLMAdapter(Protocol):
         candidates: list[dict[str, object]],
     ) -> list[dict[str, object]]:
         """Propose skill shapes (name, description, rationale)."""
+        ...
+
+
+class CandidateSynthesisAdapter(Protocol):
+    """Optional capability for bounded evidence-card consolidation.
+
+    It is intentionally separate from :class:`LLMAdapter` so existing SDK
+    adapters retain their small legacy contract.  The application only opts
+    into the hierarchical path when this capability is present.
+    """
+
+    def synthesize_candidates(
+        self,
+        source_id: str,
+        level: Literal["chapter", "book"],
+        candidates: list[dict[str, object]],
+        structure: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        """Return concise, source-unit-linked synthesized candidates.
+
+        ``structure`` is an optional list of the source's detected section
+        headings (StructureEntry-compatible dicts). It is a cheap, deterministic
+        organizing anchor the reducer may use to align units to the real book
+        structure; it is not source content quoted verbatim.
+        """
         ...

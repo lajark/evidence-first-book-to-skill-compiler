@@ -32,8 +32,8 @@ def chunk_blocks(
     source_id: str,
     entries: list[tuple[TextBlock, str]],
     *,
-    target_tokens: int = 600,
-    context_tokens: int = 80,
+    target_tokens: int = 1200,
+    context_tokens: int = 100,
 ) -> list[AnalysisChunk]:
     """Split ordered blocks deterministically without losing source mapping.
 
