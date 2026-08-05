@@ -68,6 +68,7 @@ def build_release(
         _copy_sdk_surface(repo, pkg_root)
         write_sample_extension(pkg_root / "examples" / "sample-extension")
         _copy_static(repo, pkg_root, version)
+        _write_runtime_layout(pkg_root)
         _write_install_script(pkg_root)
 
         artifacts = _collect_payload(pkg_root)
@@ -191,6 +192,34 @@ def _copy_static(repo: Path, pkg_root: Path, version: str) -> None:
     )
 
 
+def _write_runtime_layout(pkg_root: Path) -> None:
+    """Ship a visible, empty runtime layout for local installations.
+
+    ZIP archives do not preserve empty directories in the current release
+    builder, so small guidance/placeholder files make the intended input and
+    output locations visible immediately after extraction.
+    """
+    (pkg_root / "input").mkdir(parents=True, exist_ok=True)
+    (pkg_root / "input" / "README.md").write_text(
+        "# Input files\n\n"
+        "Place documents to analyse here. Input files are never modified.\n",
+        encoding="utf-8",
+    )
+    output_root = pkg_root / "output"
+    output_root.mkdir(parents=True, exist_ok=True)
+    (output_root / "README.md").write_text(
+        "# Output files\n\n"
+        "- `bundles/`: source-named AnalysisBundle JSON files.\n"
+        "- `skills/`: generated Skill directories.\n"
+        "- `workspace/`: Raw, Schema, and local LLM cache data.\n",
+        encoding="utf-8",
+    )
+    for relative in ("bundles/.gitkeep", "skills/.gitkeep", "workspace/.gitkeep"):
+        target = output_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+
+
 def _collect_payload(pkg_root: Path) -> list[dict[str, str]]:
     """Return ``{path, sha256}`` for every file under *pkg_root*."""
     artifacts = []
@@ -303,12 +332,42 @@ after you have reviewed the manifest and checksums**.
 2. Extract to a fresh directory (never run from inside the archive).
 3. Review `release-manifest.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`.
 4. `python install.py` (or `python3 install.py`) to create a dedicated
-   virtualenv under `$BOOK2SKILL_HOME/venv` (default `~/.book2skill/venv`)
-   and install the bundled Wheel. Set `BOOK2SKILL_HOME=<dir>` to deploy
-   somewhere other than the user home.
+   virtualenv under `$BOOK2SKILL_HOME/venv` (default `~/.book2skill/venv`),
+   initialise the local input/output directories, and install the bundled
+   Wheel. Set `BOOK2SKILL_HOME=<dir>` to deploy somewhere other than the user
+   home.
 5. Verify the install (`.env` not yet required — defaults to Mock mode):
    - Windows: `venv\\Scripts\\book2skill version`
    - POSIX:   `venv/bin/book2skill version`
+
+## 本地文件位置
+
+在 `BOOK2SKILL_HOME`（或解压并运行命令时的当前目录）内使用以下目录：
+
+```text
+input/                         # 放入待处理 PDF/EPUB/TXT 等，程序不会修改输入
+output/
+├── bundles/                   # bundle_<输入文件名>.json；重名自动追加 _2、_3
+├── skills/                    # 编译后的 Skill 目录
+└── workspace/                 # raw/、schema/ 与本地 LLM 缓存等过程数据
+```
+
+请先进入该目录再运行命令。首次分析会自动保存 bundle，`--json` 同时仍会把
+同一份 JSON 写到标准输出，便于脚本管道使用：
+
+```powershell
+venv\\Scripts\\book2skill analyze .\\input\\my-book.pdf --json
+```
+
+从源文件直接编译时，默认 Skill 输出为
+`output/skills/<name>/`（其中 `name` 是 `--name` 的值）：
+
+```powershell
+venv\\Scripts\\book2skill build .\\input\\my-book.pdf `
+  --name my-book-skill `
+  --description "A source-traceable skill for my book." `
+  --use-when "When this book is relevant."
+```
 
 ## 接入大模型（可选，默认为 Mock 离线模式）
 
@@ -349,7 +408,7 @@ LLM_MODEL=qwen-plus
 ### 4. 运行（`.env` 已配好，无需任何 `--llm*` 参数）
 
 ```
-book2skill analyze book.pdf --json
+book2skill analyze input/book.pdf --json
 ```
 
 > **位置说明**：`.env` 由内置解析器从当前工作目录向上逐级查找，放在运行
@@ -362,8 +421,9 @@ book2skill analyze book.pdf --json
 _INSTALL_SCRIPT_TEMPLATE = '''"""Book2Skill Core installer (FR-12).
 
 Creates a dedicated virtualenv under ``$BOOK2SKILL_HOME/venv`` (default
-``~/.book2skill/venv``) and installs the bundled Wheel into it. Set
-``BOOK2SKILL_HOME`` to deploy somewhere other than the user home.
+``~/.book2skill/venv``), provisions the local input/output layout, and
+installs the bundled Wheel into it. Set ``BOOK2SKILL_HOME`` to deploy
+somewhere other than the user home.
 """
 
 from __future__ import annotations
@@ -386,6 +446,9 @@ def main() -> int:
 
     home = os.environ.get("BOOK2SKILL_HOME") or str(Path.home() / ".book2skill")
     root = Path(home)
+    root.mkdir(parents=True, exist_ok=True)
+    for relative in ("input", "output/bundles", "output/skills", "output/workspace"):
+        (root / relative).mkdir(parents=True, exist_ok=True)
     env_dir = root / "venv"
     if not (env_dir / "Scripts" / "python.exe").exists() and not (
         env_dir / "bin" / "python"
@@ -405,6 +468,8 @@ def main() -> int:
         print(f"pip install failed (exit {exc.returncode})", file=sys.stderr)
         return exc.returncode
     print(f"Ready. Activate via: {env_dir}")
+    print(f"Input:  {root / 'input'}")
+    print(f"Output: {root / 'output'}")
     print("Run: book2skill doctor  |  book2skill extensions list")
     return 0
 

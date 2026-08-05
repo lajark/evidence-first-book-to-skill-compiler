@@ -26,9 +26,10 @@ description: 把用户合法持有的 PDF/EPUB/MOBI/AZW/TXT/Markdown/DOCX 编译
 ## Required inputs
 - 一个或多个源文件：PDF / EPUB / MOBI / AZW / AZW3 / TXT / Markdown / DOCX（HTML/RTF 为 P1，暂未实现）；
 - 用户的合法使用权确认：`--rights-note <note>`（Full Build 与 Update 模式必填，Analyze Only 可选）；
-- 可选 `--data-home <dir>`：Raw/Schema 存储根目录（默认 `./workspace`，启用来源哈希追溯、provenance 富化与快照回滚）；
+- 可选 `--data-home <dir>`：Raw/Schema 存储根目录（默认 `./output/workspace`，启用来源哈希追溯、provenance 富化与快照回滚）；
 - 可选 `--collection-id <id>`：把多本书关联到同一 Skill；
-- 可选 `--output-dir <dir>`：Full Build 输出目录（默认 `workspace/skills/<name>/`）；
+- 可选 `--bundle-dir <dir>`：AnalysisBundle 输出目录（默认 `output/bundles/`，按输入文件名自动命名且不覆盖旧文件）；
+- 可选 `--output-dir <dir>`：Full Build 输出目录（默认 `output/skills/<name>/`）；
 - 可选 `--json`：机器可读输出，便于 Agent 解析后续动作。
 
 ## Workflow
@@ -37,13 +38,13 @@ Book2Skill 通过 `book2skill` CLI 提供 4 种模式 + 4 个辅助命令。完�
 
 ### 1. Analyze Only（默认，推荐先跑）
 ```bash
-book2skill analyze <sources...> [--json] [--data-home <dir>] [--rights-note <note>] [--collection-id <id>]
+book2skill analyze <sources...> [--json] [--bundle-dir <dir>] [--data-home <dir>] [--rights-note <note>] [--collection-id <id>]
 ```
 输出结构、方法候选、冲突、低置信项、建议 Skill 形态和人工确认项；**不生成最终 Skill**。先跑这步确认输入合法、抽取正常、候选可信。产出 AnalysisBundle，可人工修订后供模式 3 使用。
 
 ### 2. Full Build
 ```bash
-book2skill build <sources...> --name <slug> --description <desc> --use-when <trigger> [--use-when ...] [--no-use-when <boundary>] [--data-home <dir>] [--rights-note <note>] [--output-dir <dir>] [--json]
+book2skill build <sources...> --name <slug> --description <desc> --use-when <trigger> [--use-when ...] [--no-use-when <boundary>] [--bundle-dir <dir>] [--data-home <dir>] [--rights-note <note>] [--output-dir <dir>] [--json]
 ```
 从 Raw 到 Schema 再编译完整 Skill，产出标准目录：`SKILL.md` + `references/` + `assets/` + `provenance.yml` + `quality-report.md`。`--name` 必须是小写字母/数字/连字符的 slug，`--description` 至少 10 字符并写明做什么、何时用。
 
@@ -51,7 +52,7 @@ book2skill build <sources...> --name <slug> --description <desc> --use-when <tri
 ```bash
 book2skill build --from-analysis <bundle.json> --name <slug> --description <desc> --use-when <trigger> [...]
 ```
-基于人工修订过的 AnalysisBundle 生成，跳过重复抽取。适合 Analyze Only 后人工审核候选、修正低置信项再编译。注意：此模式无 Raw 句柄，`provenance.yml` 中 `author`/`edition` 标 unknown（可后续手工补）。
+基于人工修订过的 AnalysisBundle 生成，跳过重复抽取。适合 Analyze Only 后人工审核候选、修正低置信项再编译。此模式必须使用与分析时相同的 `--data-home`，以核验 Raw 来源记录。
 
 ### 4. Update / Fold-in
 ```bash
@@ -64,12 +65,12 @@ book2skill update <skill-dir> --rollback --data-home <dir>
 - `book2skill validate <skill-dir> [--write] [--max-quote-words 25] [--json]`：运行 frontmatter / 来源覆盖 / 版权引文 / 注入 / 预算校验，失败退出码 1，警告退出码 0。`--write` 只写 `quality-report.md`/`.json`，不触碰 SKILL.md/references/provenance.yml。
 - `book2skill diff <old> <new> [--data-home <dir>] [--merge] [--json]`：比较两个 collection_id 或 AnalysisBundle JSON；`--merge` 应用 override 做三方合并。
 - `book2skill install <skill-dir> --host <claude|trae|codex|project> [--project-level] [--project-root <dir>] [--dry-run] [--no-backup] [--target-dir <sub>] [--json]`：原子复制到目标宿主目录，旧版本备份到 `~/.book2skill/backups/<host>/<skill>/<ts>/`。
-- `book2skill uninstall <skill-name> --host <claude|trae|codex|project> [...]`：仅删 Skill 安装目录，不删 workspace/raw/backups（幂等：不存在的 Skill 返回成功 no-op）。
-- `book2skill batch <sources...> [--json] [--data-home <dir>] [--rights-note <note>]`：批处理 Analyze Only，单文件失败不影响其他文件，输出失败清单。
+- `book2skill uninstall <skill-name> --host <claude|trae|codex|project> [...]`：仅删 Skill 安装目录，不删 `output/workspace/raw` 或备份（幂等：不存在的 Skill 返回成功 no-op）。
+- `book2skill batch <sources...> [--json] [--bundle-dir <dir>] [--data-home <dir>] [--rights-note <note>]`：批处理 Analyze Only，单文件失败不影响其他文件，并逐文件保存 Bundle。
 
 ## Output contract
-- **Analyze Only**：stdout 可读摘要或 `--json` 输出 AnalysisBundle（含 `collection_id` / `source_ids` / `structure` / `candidate_units` / `review_queue` / `conflicts` / `suggested_skills`），不写 SKILL.md。
-- **Full Build / Build from Analysis**：在 `--output-dir` 或 `workspace/skills/<name>/` 下产出标准目录，含 `SKILL.md`、`references/<kind>.md`、`assets/`、`provenance.yml`、`quality-report.md`、`skill.meta.json`（update 回读用）。
+- **Analyze Only**：stdout 可读摘要或 `--json` 输出 AnalysisBundle（含 `collection_id` / `source_ids` / `structure` / `candidate_units` / `review_queue` / `conflicts` / `suggested_skills`），同时自动保存到 `output/bundles/bundle_<输入文件名>.json`，不写 SKILL.md。
+- **Full Build / Build from Analysis**：在 `--output-dir` 或 `output/skills/<name>/` 下产出标准目录，含 `SKILL.md`、`references/<kind>.md`、`assets/`、`provenance.yml`、`quality-report.md`、`skill.meta.json`（update 回读用）。
 - **Update**：dry-run 输出计划；`--confirm` 原子替换 `<skill-dir>` 并在 `<data-home>/snapshots/<name>/<ts>/` 保留快照、追加 `publish-log.jsonl`、更新 `wiki/index.md`；`--rollback` 恢复并快照当前版本。
 - **Validate**：退出码 0=pass / 0=pass_with_warnings / 1=fail；`--write` 写 `quality-report.md`/`.json`，不触碰核心文件。
 - **Install**：`--dry-run` 预览；否则原子复制到目标宿主目录并备份旧版本；Codex host 额外重写 `agents.md` overlay。
@@ -89,34 +90,34 @@ book2skill update <skill-dir> --rollback --data-home <dir>
 
 ### 成功路径（TXT → Skill → 部署）
 ```bash
-book2skill analyze ./my-notes.txt --json --data-home ./workspace --rights-note "personal-copy"
-# 人工审核 AnalysisBundle.json，修正低置信项
-book2skill build --from-analysis ./workspace/analysis/<id>.json \
+book2skill analyze ./input/my-notes.txt --json --rights-note "personal-copy"
+# 人工审核 output/bundles/bundle_my-notes.json，修正低置信项
+book2skill build --from-analysis ./output/bundles/bundle_my-notes.json \
   --name value-investing-principles \
   --description "Extracted principles from personal reading notes." \
   --use-when "deciding long-term holdings" \
   --no-use-when "doing intraday trading"
-book2skill validate ./workspace/skills/value-investing-principles --write
-book2skill install ./workspace/skills/value-investing-principles --host claude
+book2skill validate ./output/skills/value-investing-principles --write
+book2skill install ./output/skills/value-investing-principles --host claude
 ```
 
 ### 失败/边界路径（DRM MOBI 被拒，批处理不阻塞其他文件）
 ```bash
-book2skill batch ./drm-protected.mobi ./clean.txt --data-home ./workspace
+book2skill batch ./input/drm-protected.mobi ./input/clean.txt
 # drm-protected.mobi → failed, GATE_ENCRYPTED_FILE（不绕过 DRM）
 # clean.txt → success（单文件失败不影响其他文件）
 ```
 
 ### 增量更新路径（dry-run → confirm → rollback）
 ```bash
-book2skill update ./workspace/skills/value-investing-principles ./new-essay.txt \
-  --data-home ./workspace
+book2skill update ./output/skills/value-investing-principles ./input/new-essay.txt \
+  --data-home ./output/workspace
 # 输出 added/modified/conflicts，人工审核
-book2skill update ./workspace/skills/value-investing-principles ./new-essay.txt \
-  --data-home ./workspace --confirm
+book2skill update ./output/skills/value-investing-principles ./input/new-essay.txt \
+  --data-home ./output/workspace --confirm
 # 原子发布 + 快照
-book2skill update ./workspace/skills/value-investing-principles --rollback \
-  --data-home ./workspace
+book2skill update ./output/skills/value-investing-principles --rollback \
+  --data-home ./output/workspace
 # 恢复上一版本
 ```
 

@@ -57,6 +57,11 @@ class TestReleasePackage:
                 "README_INSTALL.md",
                 ".env.example",
                 "docs/LLM_CONFIG.md",
+                "input/README.md",
+                "output/README.md",
+                "output/bundles/.gitkeep",
+                "output/skills/.gitkeep",
+                "output/workspace/.gitkeep",
                 "contracts/extension-manifest.schema.json",
                 "contracts/release-manifest.schema.json",
                 "sdk/api-surface.json",
@@ -79,6 +84,49 @@ class TestReleasePackage:
         # Guard the os.system -> subprocess.run fix (call form, not comments).
         assert "os.system(" not in src, "install.py must not call os.system"
         assert "subprocess.run(" in src, "install.py must install via subprocess.run"
+
+    def test_installer_initializes_user_runtime_layout(
+        self, repo_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The installer creates visible input/output directories at its target."""
+        zip_path, _ = _release(repo_root, tmp_path)
+        with zipfile.ZipFile(zip_path) as zf:
+            source = zf.read("install.py").decode("utf-8")
+
+        release_root = tmp_path / "release-root"
+        (release_root / "dist").mkdir(parents=True)
+        (release_root / "dist" / "book2skill-test.whl").write_bytes(b"wheel")
+        namespace: dict[str, object] = {
+            "__name__": "release_installer_test",
+            "__file__": str(release_root / "install.py"),
+        }
+        exec(compile(source, "install.py", "exec"), namespace)
+
+        class FakeEnvBuilder:
+            def __init__(self, **_kwargs: object) -> None:
+                pass
+
+            def create(self, env_dir: Path) -> None:
+                scripts = env_dir / "Scripts"
+                scripts.mkdir(parents=True)
+                (scripts / "python.exe").write_bytes(b"python")
+
+        venv_module = namespace["venv"]
+        subprocess_module = namespace["subprocess"]
+        monkeypatch.setattr(venv_module, "EnvBuilder", FakeEnvBuilder)  # type: ignore[arg-type]
+        monkeypatch.setattr(subprocess_module, "run", lambda *_args, **_kwargs: None)  # type: ignore[arg-type]
+        home = tmp_path / "installed"
+        monkeypatch.setenv("BOOK2SKILL_HOME", str(home))
+
+        main = namespace["main"]
+        assert main() == 0  # type: ignore[operator]
+        for relative in (
+            "input",
+            "output/bundles",
+            "output/skills",
+            "output/workspace",
+        ):
+            assert (home / relative).is_dir()
 
     def test_manifest_schema_conformant(self, repo_root: Path, tmp_path: Path) -> None:
         zip_path, _ = _release(repo_root, tmp_path)

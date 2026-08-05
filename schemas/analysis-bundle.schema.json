@@ -79,6 +79,11 @@
         "fallback_allowed": {"type": "boolean"},
         "invocations": {"type": "array"}
       }
+    },
+    "quality_review": {
+      "type": ["array", "null"],
+      "description": "Optional selective quality review patches (OPT-P1-10).",
+      "items": {"$ref": "quality-review.schema.json"}
     }
   }
 }

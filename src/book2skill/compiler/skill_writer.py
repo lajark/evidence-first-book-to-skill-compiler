@@ -305,9 +305,23 @@ class SkillWriter:
         lines: list[str] = []
         for i, step in enumerate(steps, 1):
             lines.append(f"{i}. {step.step}")
-            if step.description:
+            if step.description and not SkillWriter._step_repeats_description(step):
                 lines.append(f"   - {step.description}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _step_repeats_description(step: WorkflowStep) -> bool:
+        """Avoid rendering a compiler-generated content preview twice.
+
+        ``IRBuilder`` labels principle steps with the opening slice of the
+        same unit placed in ``description``. Rendering both makes the entry
+        point longer without adding a new instruction, and was especially
+        visible on methodology books with many principles.
+        """
+        if not step.description:
+            return False
+        label = step.step.split(":", 1)[-1].strip().removesuffix("...").strip()
+        return len(label) >= 20 and step.description.strip().startswith(label)
 
     def _safe_target(self, rel_path: str) -> Path:
         """Resolve *rel_path* under the output dir, rejecting traversal."""

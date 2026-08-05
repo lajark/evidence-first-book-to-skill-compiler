@@ -58,6 +58,8 @@ def candidate_to_unit(c: CandidateUnit) -> KnowledgeUnit:
         unit_id=c.unit_id,
         kind=kind,
         content=c.content,
+        conditions=c.conditions,
+        exceptions=c.exceptions,
         source_refs=refs,
         confidence=c.confidence,
         review_status=status,

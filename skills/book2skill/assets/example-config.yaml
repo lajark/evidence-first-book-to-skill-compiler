@@ -12,8 +12,8 @@ schema_version: 1
 language: zh-CN
 
 # 默认数据根目录：Raw / Schema / Wiki / snapshots 都在此目录下
-# 默认 ./workspace；可指向仓库外以避免被 Git 跟踪
-data_home: ./workspace
+# 默认 ./output/workspace；可指向仓库外以避免被 Git 跟踪
+data_home: ./output/workspace
 
 # 默认模式：analyze | build | build-from-analysis | update
 default_mode: analyze
@@ -25,6 +25,9 @@ cloud_llm:
   base_url: null        # 例：https://api.openai.com/v1（启用时填）
   model: null           # 例：gpt-4o-mini
   api_key_env: null     # 仅从环境变量读取，不写入本文件
+  # 多 provider profile（P1）：需要按角色/成本/数据策略分别使用多个云模型时，
+  # 改用 llm-profiles YAML 集合（见 llm-profiles.example.yaml 与 docs/LLM_CONFIG.md 第六节）。
+  # CLI：--llm-profiles <path> [--llm-profile <id>]；密钥只写环境变量名。
 
 # 输入合法性上限
 limits:

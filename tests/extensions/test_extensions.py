@@ -36,7 +36,7 @@ def build_package(
     ext_id: str,
     version: str,
     *,
-    requires: str = ">=0.1.0,<1.0.0",
+    requires: str = ">=0.1.0,<2.0.0",
     deps: list[tuple[str, str]] | None = None,
     permissions: list[str] | None = None,
     contributes: dict[str, list[str]] | None = None,

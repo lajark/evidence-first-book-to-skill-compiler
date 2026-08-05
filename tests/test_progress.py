@@ -11,6 +11,7 @@ from book2skill.application.progress import (
     STAGE_EXTRACT,
     STAGE_SKILLS,
     STAGE_STRUCTURE,
+    ProgressEvent,
     noop_progress,
 )
 
@@ -29,6 +30,19 @@ def _collect_cb() -> tuple[list[tuple[str, int, int, str]], object]:
         calls.append((stage, current, total, detail))
 
     return calls, _cb
+
+
+class _EventCollector:
+    """Opt-in reporter seam for structured progress updates."""
+
+    def __init__(self) -> None:
+        self.events: list[ProgressEvent] = []
+
+    def __call__(self, stage: str, current: int, total: int, detail: str = "") -> None:
+        self.events.append(ProgressEvent(stage, current, total, detail))
+
+    def on_progress_event(self, event: ProgressEvent) -> None:
+        self.events.append(event)
 
 
 class TestAnalyzeProgress:
@@ -97,6 +111,94 @@ class TestAnalyzeProgress:
             # A leading ``0/total`` "stage started" ping is emitted before the
             # slow LLM bulk call; per-item completion pings then run 1..total.
             assert currents[0] in (0, 1) and currents[-1] == totals.pop()
+
+    def test_chunk_completion_progress_is_not_replayed_after_bulk_call(
+        self, tmp_path: Path
+    ) -> None:
+        f = _write_txt(tmp_path / "book.txt", "word " * 2_000)
+        use_case = AnalyzeUseCase()
+        collector = _EventCollector()
+
+        use_case.execute([str(f)], on_progress=collector)
+
+        completed = [
+            event
+            for event in collector.events
+            if event.stage == STAGE_STRUCTURE and event.status == "completed"
+        ]
+        assert [event.current for event in completed] == list(
+            range(1, completed[0].total + 1)
+        )
+        assert all(event.work_completed is not None for event in completed)
+        assert all(event.work_total is not None for event in completed)
+        assert completed[-1].work_completed == completed[-1].work_total
+
+    def test_structure_start_uses_matching_timing_history_for_eta(
+        self, tmp_path: Path
+    ) -> None:
+        f = _write_txt(tmp_path / "book.txt", "word " * 1_000)
+        data_home = tmp_path / "data"
+        AnalyzeUseCase(data_home=data_home).execute([str(f)])
+        collector = _EventCollector()
+
+        AnalyzeUseCase(data_home=data_home).execute([str(f)], on_progress=collector)
+
+        started = next(
+            event
+            for event in collector.events
+            if event.stage == STAGE_STRUCTURE and event.status == "started"
+        )
+        assert started.eta_seconds is not None
+        assert started.eta_lower_seconds is not None
+        assert started.eta_upper_seconds is not None
+
+    def test_single_real_request_projects_structure_and_skill_work(
+        self, tmp_path: Path
+    ) -> None:
+        import time
+
+        from book2skill.llm.chunking import ChunkItem
+        from book2skill.llm.mock_adapter import MockLLMAdapter
+        from book2skill.llm.runtime import LLMRuntimeConfig, RuntimeLLMAdapter
+
+        delegate = MockLLMAdapter()
+
+        class _SlowProvider:
+            def analyze_chunk(
+                self, source_id: str, items: list[ChunkItem]
+            ) -> dict[str, list[dict[str, object]]]:
+                time.sleep(0.6)
+                return delegate.analyze_chunk(source_id, items)
+
+            def suggest_skills(
+                self, source_id: str, candidates: list[dict[str, object]]
+            ) -> list[dict[str, object]]:
+                time.sleep(0.6)
+                return delegate.suggest_skills(source_id, candidates)
+
+        adapter = RuntimeLLMAdapter(
+            LLMRuntimeConfig(provider="openai", model="demo", api_key="test")
+        )
+        adapter._provider = _SlowProvider()  # noqa: SLF001 - timing seam
+        source = _write_txt(
+            tmp_path / "single.txt",
+            "A traceable principle with enough detail to become a candidate.",
+        )
+        collector = _EventCollector()
+
+        AnalyzeUseCase(llm=adapter).execute([str(source)], on_progress=collector)
+
+        for stage in (STAGE_STRUCTURE, STAGE_SKILLS):
+            projected = [
+                event
+                for event in collector.events
+                if event.stage == stage
+                and event.mode == "estimated"
+                and event.work_completed is not None
+                and event.work_total is not None
+                and 0 < event.work_completed < event.work_total
+            ]
+            assert projected, f"expected projected heartbeat for {stage}"
 
     def test_skills_detail_carries_source_id(self, tmp_path: Path) -> None:
         f = _write_txt(

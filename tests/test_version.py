@@ -16,4 +16,4 @@ def test_hatch_uses_runtime_version_as_its_single_source() -> None:
     assert pyproject["tool"]["hatch"]["version"]["path"] == (
         "src/book2skill/__init__.py"
     )
-    assert __version__ == "0.1.0"
+    assert __version__ == "1.0.0"

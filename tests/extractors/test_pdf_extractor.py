@@ -79,6 +79,31 @@ def test_extractor_rejects_scanned_or_empty_pdf(
     assert "OCR" in exc_info.value.recovery
 
 
+def test_extractor_rejects_thin_text_from_multipage_scanned_pdf(
+    tmp_path: Path, extractor: PdfExtractor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cover-page text layer must not mask an otherwise scanned book."""
+    source_path = tmp_path / "mostly-scanned.pdf"
+    source_path.write_bytes(b"%PDF-1.4\nplaceholder")
+    monkeypatch.setattr(
+        PdfExtractor,
+        "_extract_text",
+        staticmethod(lambda _path: "Title and publisher metadata only."),
+    )
+    monkeypatch.setattr(
+        "book2skill.extractors.pdf_extractor.count_pages", lambda _path: 100
+    )
+    monkeypatch.setattr(
+        "book2skill.extractors.ocr_backend.is_available", lambda: False
+    )
+
+    with pytest.raises(DomainError, match="insufficient") as exc_info:
+        extractor.extract(source_path, source_id="d" * 64)
+
+    assert exc_info.value.code == ErrorCode.GATE_DAMAGED_FILE
+    assert "OCR" in exc_info.value.recovery
+
+
 def _can_create_encrypted_pdf() -> bool:
     """Check whether PyMuPDF is available for creating encrypted test PDFs."""
     try:

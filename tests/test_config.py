@@ -13,6 +13,11 @@ class TestParseEnvFile:
 
     def test_missing_file_returns_empty(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
+        # The project root may host a real .env; force the walk-up to find
+        # nothing so the "no env file" branch is exercised deterministically.
+        monkeypatch.setattr(
+            "book2skill.config._find_env_file", lambda _start: None
+        )
         assert load_env_file() == {}
 
     def test_explicit_missing_path_returns_empty(self, tmp_path: Path) -> None:
@@ -155,6 +160,10 @@ class TestCliLlmResolution:
     def test_shell_env_overrides_env_file(
         self, tmp_path: Path, monkeypatch
     ) -> None:
+        # The autouse fixture pins BOOK2SKILL_LLM=mock at suite scope; drop it
+        # so the .env's openai setting is the active provider, then verify
+        # shell OPENAI_* values override the file's values.
+        monkeypatch.delenv("BOOK2SKILL_LLM", raising=False)
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".env").write_text(
             "BOOK2SKILL_LLM=openai\nOPENAI_MODEL=from-file\n",
@@ -181,6 +190,12 @@ class TestCliLlmResolution:
         ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.chdir(tmp_path)
+        # Guard against a real project-root .env being walked into: with the
+        # shell var removed, discovery of any .env would otherwise resolve a
+        # real provider instead of the default Mock.
+        monkeypatch.setattr(
+            "book2skill.config._find_env_file", lambda _start: None
+        )
 
         from book2skill.cli import _build_llm_adapter
 

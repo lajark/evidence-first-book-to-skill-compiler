@@ -7,7 +7,6 @@ Falls back to a stdlib zip-based reader when ``ebooklib`` is unavailable.
 from __future__ import annotations
 
 import hashlib
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,8 +21,8 @@ from book2skill.domain import (
     TextBlock,
 )
 from book2skill.extractors._vendor.book_to_skill.epub import (
-    extract_with_ebooklib,
-    extract_with_zipfile,
+    extract_chapters_with_ebooklib,
+    extract_chapters_with_zipfile,
 )
 from book2skill.extractors._vendor.book_to_skill.sanitize import sanitize_extracted_text
 from book2skill.extractors.base import Extractor, ExtractorCapabilities
@@ -63,13 +62,13 @@ class EpubExtractor(Extractor):
                 recovery="Check the path and try again.",
             )
 
-        # Prefer ebooklib; fall back to the stdlib zip reader. Both join
-        # chapters with a blank line, so we recover chapter boundaries by
-        # splitting on runs of two or more newlines.
-        text = extract_with_ebooklib(str(path))
-        if text is None:
-            text = extract_with_zipfile(str(path))
-        if text is None:
+        # Keep each spine document separate.  Splitting a joined text stream
+        # on blank lines incorrectly turns ordinary paragraphs into chapters,
+        # which makes long books both slower and semantically incoherent.
+        chapters = extract_chapters_with_ebooklib(str(path))
+        if chapters is None:
+            chapters = extract_chapters_with_zipfile(str(path))
+        if chapters is None:
             raise DomainError(
                 code=ErrorCode.GATE_DAMAGED_FILE,
                 input_id=str(path),
@@ -77,20 +76,23 @@ class EpubExtractor(Extractor):
                 recovery="The file may be corrupted or not a valid EPUB.",
             )
 
-        sanitized_text, _removed = sanitize_extracted_text(text)
-        return [
-            TextBlock(
-                text=chapter,
-                locator=Locator(
-                    kind=LocatorKind.CHAPTER,
-                    page=None,
-                    chapter=str(idx),
-                    paragraph=None,
-                ),
+        blocks: list[TextBlock] = []
+        for idx, chapter in enumerate(chapters, start=1):
+            sanitized, _removed = sanitize_extracted_text(chapter)
+            if not sanitized:
+                continue
+            blocks.append(
+                TextBlock(
+                    text=sanitized,
+                    locator=Locator(
+                        kind=LocatorKind.CHAPTER,
+                        page=None,
+                        chapter=str(idx),
+                        paragraph=None,
+                    ),
+                )
             )
-            for idx, chapter in enumerate(self._chapters(sanitized_text), start=1)
-            if chapter
-        ]
+        return blocks
 
     def extract(
         self,
@@ -131,15 +133,3 @@ class EpubExtractor(Extractor):
         ]
 
         return manifest, entries
-
-    @staticmethod
-    def _chapters(text: str) -> list[str]:
-        """Split extracted text into chapter blocks.
-
-        Both backends join chapters with a blank line (``"\\n\\n"``) while
-        intra-chapter block elements are separated by single newlines, so a
-        run of two or more newlines reliably delimits chapters.
-        """
-        normalized = text.replace("\r\n", "\n")
-        chapters = [c.strip() for c in re.split(r"\n{2,}", normalized)]
-        return [c for c in chapters if c]

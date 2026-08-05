@@ -10,7 +10,7 @@
 # Local modifications:
 #   - Added provenance header.
 #   - Adjusted import to use the vendored `html` module within this package.
-#   - No functional changes.
+#   - Added boundary-preserving chapter extraction for Core's LLM pipeline.
 
 """EPUB text extraction with optional ebooklib backend and stdlib fallback."""
 
@@ -24,18 +24,27 @@ import zipfile
 from book2skill.extractors._vendor.book_to_skill.html import _HTMLTextExtractor
 
 
-def extract_with_ebooklib(epub_path: str) -> str | None:
+def extract_chapters_with_ebooklib(epub_path: str) -> list[str] | None:
+    """Extract one sanitized text payload per EPUB document item.
+
+    This Core-owned extension keeps the upstream parser's optional-dependency
+    behaviour while preserving the boundary that is otherwise lost by joining
+    all chapters into one string.  The boundary is essential for bounded LLM
+    synthesis and is not exposed as an upstream compatibility contract.
+    """
     try:
         import ebooklib
         from ebooklib import epub
         from bs4 import BeautifulSoup
 
         book = epub.read_epub(epub_path)
-        parts = []
+        parts: list[str] = []
         for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             soup = BeautifulSoup(item.get_content(), "html.parser")
-            parts.append(soup.get_text(separator="\n"))
-        return "\n\n".join(parts)
+            text = soup.get_text(separator="\n").strip()
+            if text:
+                parts.append(text)
+        return parts or None
     except ImportError:
         return None
     except Exception as e:
@@ -44,6 +53,12 @@ def extract_with_ebooklib(epub_path: str) -> str | None:
             file=sys.stderr,
         )
         return None
+
+
+def extract_with_ebooklib(epub_path: str) -> str | None:
+    """Backward-compatible joined-text wrapper."""
+    chapters = extract_chapters_with_ebooklib(epub_path)
+    return "\n\n".join(chapters) if chapters else None
 
 
 def _find_opf_path(zf: zipfile.ZipFile) -> str | None:
@@ -66,8 +81,8 @@ def _find_opf_path(zf: zipfile.ZipFile) -> str | None:
     return opf_files[0] if opf_files else None
 
 
-def extract_with_zipfile(epub_path: str) -> str | None:
-    """stdlib-only EPUB extractor: unzip → parse HTML files."""
+def extract_chapters_with_zipfile(epub_path: str) -> list[str] | None:
+    """Extract ordered EPUB spine documents without erasing boundaries."""
     try:
         with zipfile.ZipFile(epub_path) as zf:
             names = zf.namelist()
@@ -122,22 +137,30 @@ def extract_with_zipfile(epub_path: str) -> str | None:
             if not html_files:
                 return None
 
-            parts = []
+            parts: list[str] = []
             for name in html_files:
                 try:
                     raw = zf.read(name).decode("utf-8", errors="replace")
                     parser = _HTMLTextExtractor()
                     parser.feed(raw)
-                    parts.append(parser.get_text())
+                    text = parser.get_text().strip()
+                    if text:
+                        parts.append(text)
                 except Exception:
                     continue
-            return "\n\n".join(parts) if parts else None
+            return parts or None
     except Exception as e:
         print(
             f"  [warn] extract_with_zipfile failed: {type(e).__name__}: {e}",
             file=sys.stderr,
         )
         return None
+
+
+def extract_with_zipfile(epub_path: str) -> str | None:
+    """Backward-compatible joined-text wrapper."""
+    chapters = extract_chapters_with_zipfile(epub_path)
+    return "\n\n".join(chapters) if chapters else None
 
 
 def count_epub_chapters(epub_path: str) -> int:

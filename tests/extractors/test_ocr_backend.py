@@ -109,7 +109,7 @@ class TestPdfExtractorOcrFallback:
             extractor.extract_text_blocks(pdf_path)
 
         assert exc.value.code == ErrorCode.GATE_DAMAGED_FILE
-        assert "OCR also found no text" in exc.value.message
+        assert "OCR also found no usable text" in exc.value.message
 
     def test_ocr_failure_raises_damaged_error(self, tmp_path: Path) -> None:
         """When OCR raises an exception, it's wrapped as GATE_DAMAGED_FILE."""

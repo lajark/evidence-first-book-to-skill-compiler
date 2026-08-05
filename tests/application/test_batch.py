@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from book2skill.application.analyze import AnalyzeUseCase
@@ -529,15 +530,22 @@ runner = CliRunner()
 class TestBatchCommand:
     """End-to-end CLI tests for the `batch` subcommand."""
 
-    def test_batch_cli_json_output(self, tmp_path: Path) -> None:
+    def test_batch_cli_json_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         good = _write_txt(tmp_path / "a.txt", "# Heading\nContent.")
         result = runner.invoke(app, ["batch", str(good), "--json"])
         assert result.exit_code == 0
         payload = json.loads(result.stdout)
         assert payload["summary"]["succeeded"] == 1
         assert payload["outcomes"][0]["status"] == "success"
+        assert (tmp_path / "output" / "bundles" / "bundle_a.json").is_file()
 
-    def test_batch_cli_human_output(self, tmp_path: Path) -> None:
+    def test_batch_cli_human_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         good = _write_txt(tmp_path / "a.txt", "# Heading\nContent.")
         result = runner.invoke(app, ["batch", str(good)])
         assert result.exit_code == 0

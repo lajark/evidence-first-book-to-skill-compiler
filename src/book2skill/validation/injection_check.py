@@ -59,13 +59,12 @@ _INJECTION_PATTERNS_EN: list[re.Pattern[str]] = [
 _INJECTION_PATTERNS_ZH: list[re.Pattern[str]] = [
     re.compile(r"忽略(?:上述|以上|前面|之前|所有)?(?:指令|指示|规则|约束)"),
     re.compile(r"无视(?:上述|以上|前面|之前|所有)?(?:指令|指示|规则|约束)"),
-    re.compile(r"重新开始"),
     re.compile(r"你现在是"),
     re.compile(r"系统提示"),
     re.compile(r"角色设定"),
     re.compile(r"新(?:指令|指示)\s*[：:]"),
     re.compile(r"忘掉(?:一切|所有|前面|之前)"),
-    re.compile(r"扮演(?:一个|一名)?"),
+    re.compile(r"扮演(?:一个|一名)?.{0,20}(?:助手|系统|AI|模型)"),
 ]
 
 

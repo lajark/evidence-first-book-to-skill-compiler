@@ -40,12 +40,47 @@ class CandidateUnit(BaseModel):
     unit_id: str
     kind: str
     content: str = Field(..., min_length=1)
+    conditions: list[str] = Field(default_factory=list)
+    exceptions: list[str] = Field(default_factory=list)
     source_refs: list[dict[str, Any]] = Field(..., min_length=1)
     confidence: float = Field(..., ge=0.0, le=1.0)
     review_status: Literal[
         "candidate", "reviewed", "approved", "rejected", "superseded"
     ]
     record_version: int = Field(1, ge=1)
+
+
+#: A reviewer's decision on a candidate unit (OPT-P1-10 quality review).
+Disposition = Literal["accept", "reject", "merge"]
+
+
+class ReviewPatch(BaseModel):
+    """A source-replayable review decision for one candidate unit.
+
+    ``source_refs`` must be a subset of the reviewed unit's original refs;
+    the quality layer enforces this before a patch is accepted. ``model_id``
+    is a redacted identifier (never a credential or endpoint).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    unit_id: str
+    disposition: Disposition
+    revised_content: str | None = None
+    rationale: str
+    source_refs: list[dict[str, Any]] = Field(default_factory=list)
+    model_id: str
+
+    @model_validator(mode="after")
+    def _validate_patch(self) -> ReviewPatch:
+        if self.disposition == "merge" and not self.revised_content:
+            raise ValueError("A 'merge' review patch requires revised_content")
+        return self
+
+    def references_known(self, unit: CandidateUnit) -> bool:
+        """True when every source ref also exists on the original unit."""
+        known = [tuple(sorted(ref.items())) for ref in unit.source_refs]
+        return all(tuple(sorted(ref.items())) in known for ref in self.source_refs)
 
 
 class SuggestedSkill(BaseModel):
@@ -76,6 +111,7 @@ class AnalysisBundle(BaseModel):
     conflicts: list[ConflictRecord] = Field(default_factory=list)
     suggested_skills: list[SuggestedSkill] = Field(default_factory=list)
     analysis_run: AnalysisRunManifest | None = None
+    quality_review: list[ReviewPatch] | None = None
 
     @model_validator(mode="after")
     def _validate_unique_ids(self) -> AnalysisBundle:

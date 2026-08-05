@@ -150,6 +150,31 @@ class TestWriteDirectory:
         # description on next line
         assert "Clarify objectives first." in content
 
+    def test_workflow_does_not_repeat_compiler_generated_preview(
+        self, writer: SkillWriter
+    ) -> None:
+        ir = _ir().model_copy(
+            update={
+                "workflow": [
+                    WorkflowStep(
+                        step=(
+                            "Principle: Keep the required action deliberately "
+                            "small..."
+                        ),
+                        description=(
+                            "Keep the required action deliberately small so it remains "
+                            "reliable on low-motivation days."
+                        ),
+                    )
+                ]
+            }
+        )
+
+        writer.write(ir)
+        content = (writer._output_dir / "SKILL.md").read_text(encoding="utf-8")
+
+        assert content.count("Keep the required action deliberately small") == 1
+
     def test_references_routing_appended(
         self, writer: SkillWriter
     ) -> None:

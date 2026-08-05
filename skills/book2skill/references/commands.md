@@ -11,20 +11,21 @@
 ## analyze — Analyze Only 模式（FR-03-1）
 
 ```bash
-book2skill analyze <sources...> [--json] [--data-home <dir>] [--rights-note <note>] [--collection-id <id>]
+book2skill analyze <sources...> [--json] [--bundle-dir <dir>] [--data-home <dir>] [--rights-note <note>] [--collection-id <id>]
 ```
 
 输入：
 - `<sources...>`：一个或多个源文件 / 目录 / glob；
-- `--data-home`：Raw 存储根目录（默认内存态，不落盘）；
+- `--bundle-dir`：AnalysisBundle 存储目录（默认 `output/bundles/`）；
+- `--data-home`：Raw/Schema/缓存存储根目录（默认 `output/workspace/`）；
 - `--rights-note`：合法使用权确认备注，写入每个 manifest；
 - `--collection-id`：显式 collection id（默认自动派生）；
-- `--json`：stdout 输出 AnalysisBundle JSON。
+- `--json`：stdout 输出 AnalysisBundle JSON；不会影响自动保存的 Bundle 文件。
 
 输出：
 - 可读模式：`collection_id` / `sources` / `structure entries` / `candidate units` / `review queue` / `conflicts` / `suggested skills` 摘要；
 - `--json`：完整 AnalysisBundle，含 `structure` / `candidate_units` / `review_queue` / `conflicts` / `suggested_skills`；
-- **不生成最终 Skill**，不写 SKILL.md。
+- 自动保存 `output/bundles/bundle_<输入文件名>.json`，同名时追加序号；不生成最终 Skill，不写 SKILL.md。
 
 失败码：
 - `GATE_FILE_NOT_FOUND` / `GATE_EMPTY_FILE` / `GATE_DAMAGED_FILE` / `GATE_ENCRYPTED_FILE` / `GATE_UNSUPPORTED_FORMAT` / `GATE_COMPRESSION_BOMB` / `GATE_FILE_TOO_LARGE`；
@@ -33,7 +34,7 @@ book2skill analyze <sources...> [--json] [--data-home <dir>] [--rights-note <not
 ## batch — 批处理 Analyze Only（FR-02）
 
 ```bash
-book2skill batch <sources...> [--json] [--data-home <dir>] [--rights-note <note>]
+book2skill batch <sources...> [--json] [--bundle-dir <dir>] [--data-home <dir>] [--rights-note <note>]
 ```
 
 逐文件调用 AnalyzeUseCase，单文件失败不影响其他文件，输出失败清单（`FailureRecord`：path/code/message/recovery）。退出码：全失败为 1，否则 0。
@@ -41,7 +42,7 @@ book2skill batch <sources...> [--json] [--data-home <dir>] [--rights-note <note>
 ## build — Full Build / Build from Analysis（FR-03-2 / FR-03-3）
 
 ```bash
-book2skill build <sources...> --name <slug> --description <desc> --use-when <trigger> [--use-when ...] [--no-use-when <boundary>] [--data-home <dir>] [--rights-note <note>] [--output-dir <dir>] [--json]
+book2skill build <sources...> --name <slug> --description <desc> --use-when <trigger> [--use-when ...] [--no-use-when <boundary>] [--bundle-dir <dir>] [--data-home <dir>] [--rights-note <note>] [--output-dir <dir>] [--json]
 book2skill build --from-analysis <bundle.json> --name <slug> --description <desc> --use-when <trigger> [...]
 ```
 
@@ -52,7 +53,8 @@ book2skill build --from-analysis <bundle.json> --name <slug> --description <desc
 - `--use-when`（可重复）：触发场景；
 - `--no-use-when`（可重复）：不适用场景；
 - `--data-home`：启用时 `provenance.yml` 填真实 `content_sha256` / `title` / `format` / `ingested_at`；
-- `--output-dir`：默认 `workspace/skills/<name>/`；
+- `--bundle-dir`：Full Build 产生的 AnalysisBundle 存储目录（默认 `output/bundles/`）；
+- `--output-dir`：默认 `output/skills/<name>/`；
 - `--rights-note`：Full Build 必填，Build from Analysis 可选（无新 Raw 写入）。
 
 输出：标准目录 `SKILL.md` + `references/<kind>.md` + `assets/` + `provenance.yml` + `quality-report.md` + `skill.meta.json`。

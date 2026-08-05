@@ -67,6 +67,14 @@ _BACKENDS = (
     extract_with_docling,
 )
 
+# A text layer on only a title/metadata page can make an image-only book look
+# superficially readable. Keep this deliberately conservative: it is a guard
+# for long documents with vanishing coverage, not a readability score for
+# short PDFs, slide decks, or sparse forms.
+_THIN_TEXT_MIN_PAGES = 8
+_THIN_TEXT_MAX_CHARACTERS = 500
+_THIN_TEXT_MAX_TEXT_PAGE_RATIO = 0.05
+
 
 class PdfExtractor(Extractor):
     """Extract PDF files into per-page text blocks."""
@@ -141,9 +149,10 @@ class PdfExtractor(Extractor):
                 ),
             ) from exc
 
-        if text is None or not text.strip():
-            # No text recovered — likely a scanned/image-only PDF.
-            # Attempt OCR fallback if Tesseract is available (P1).
+        page_count = count_pages(str(path))
+        if self._needs_ocr_fallback(text, page_count=page_count):
+            # No usable text recovered — likely a scanned/image-only PDF or
+            # a cover-only text layer. Attempt OCR if Tesseract is available.
             from book2skill.extractors.ocr_backend import (
                 INSTALL_HINT,
                 extract_text_from_pdf,
@@ -170,8 +179,8 @@ class PdfExtractor(Extractor):
                         code=ErrorCode.GATE_DAMAGED_FILE,
                         input_id=str(path),
                         message=(
-                            f"No text extracted from PDF "
-                            f"(OCR also found no text): {path}"
+                            "No text extracted or PDF text extraction was insufficient "
+                            f"(OCR also found no usable text): {path}"
                         ),
                         recovery=(
                             "The PDF may contain only non-text images. "
@@ -183,20 +192,18 @@ class PdfExtractor(Extractor):
                     code=ErrorCode.GATE_DAMAGED_FILE,
                     input_id=str(path),
                     message=(
-                        f"No text extracted from PDF "
+                        "No text extracted or PDF text extraction was insufficient "
                         f"(possibly scanned/image-only): {path}"
                     ),
                     recovery=INSTALL_HINT,
                 )
 
+        assert text is not None  # established by the OCR-or-reject branch above
         sanitized_text, _removed = sanitize_extracted_text(text)
         pages = self._pages(sanitized_text)
         # A single-page PDF is still safely addressable as page 1 even when a
         # fallback backend omits form-feed separators. For multi-page output,
         # never infer page numbers from a flattened text stream.
-        page_count = (
-            count_pages(str(path)) if "\f" not in sanitized_text else len(pages)
-        )
         has_page_boundaries = "\f" in sanitized_text or (
             page_count == 1 and len(pages) == 1
         )
@@ -293,6 +300,24 @@ class PdfExtractor(Extractor):
                 return bool(pypdf.PdfReader(fh).is_encrypted)
         except Exception:
             return False
+
+    @staticmethod
+    def _needs_ocr_fallback(text: str | None, *, page_count: int) -> bool:
+        """Return whether regular extraction is too thin for a long PDF.
+
+        OCR should run not only for completely empty output. Some scanned
+        books retain a selectable cover or copyright page, which otherwise
+        reaches the LLM as if it represented the whole document.
+        """
+        if text is None or not text.strip():
+            return True
+        if page_count < _THIN_TEXT_MIN_PAGES:
+            return False
+        extracted_pages = [page for page in text.split("\f") if page.strip()]
+        return (
+            len(text.strip()) <= _THIN_TEXT_MAX_CHARACTERS
+            and len(extracted_pages) / page_count <= _THIN_TEXT_MAX_TEXT_PAGE_RATIO
+        )
 
     @staticmethod
     def _pages(text: str) -> list[str]:

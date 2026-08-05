@@ -83,6 +83,18 @@ class TestInjectionCheck:
         assert result.status == CheckStatus.FAIL
         assert "injection.phrase" in result.evidence
 
+    def test_common_chinese_action_phrases_do_not_fail(self, tmp_path: Path) -> None:
+        _make_skill(
+            tmp_path,
+            skill_md_body=(
+                "# Skill\n\n任务被打断后可以重新开始；练习中可扮演一个侦探。\n"
+            ),
+        )
+
+        result = InjectionCheck().run(tmp_path)
+
+        assert result.status == CheckStatus.PASS
+
     def test_http_url_warns(self, tmp_path: Path) -> None:
         _make_skill(
             tmp_path,

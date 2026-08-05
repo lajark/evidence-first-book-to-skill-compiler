@@ -159,7 +159,7 @@ pip install -e ".[pdf,dev]"
 
 ### 4. 放置输入 PDF
 
-输入文件**没有固定的强制目录**——analyze 直接接受你给出的任意文件路径。建议在项目根建一个 `input\` 目录存放待处理文档，方便管理。把你的 PDF（假设名为 `my-book.pdf`）放到该目录：
+输入文件**没有固定的强制目录**——analyze 直接接受你给出的任意文件路径。发布包安装后会创建 `input\` 与 `output\`；建议把待处理文档放在 `input\`，把运行产物统一保留在 `output\`。把你的 PDF（假设名为 `my-book.pdf`）放到该目录：
 
 ```bash
 mkdir input
@@ -169,10 +169,11 @@ mkdir input
 ### 5. 运行首次分析
 
 ```bash
-book2skill analyze input/my-book.pdf --json > bundle.json
+book2skill analyze input/my-book.pdf --json
 ```
 
-- `--json` 把结构化结果 `AnalysisBundle` 输出到标准输出，`> bundle.json` 重定向保存为文件，用于人工审核或后续 `build --from-analysis`。
+- 分析完成后会自动保存 `output/bundles/bundle_my-book.json`；如已有同名产物，会自动使用 `_2`、`_3` 后缀，不覆盖旧文件。
+- `--json` 仍把同一份结构化 `AnalysisBundle` 输出到标准输出，便于脚本管道处理。
 - **默认完全离线**（Mock LLM），无需任何 API 配置即可跑通首个示例。
 
 看到类似输出即代表成功：
@@ -191,9 +192,10 @@ Book2Skill 对文件位置采用「**显式路径优先 + 默认值兜底**」�
 
 | 对象 | 位置约定 | 说明 |
 |------|---------|------|
-| **输入文档** | 无固定目录，由命令行直接指定（如 `input/my-book.pdf`） | analyze / build / batch 的 `sources` 参数，任意路径均可 |
-| **Raw 固化目录** | `--data-home <dir>`，默认不传则**纯内存不落盘**；配置文件默认 `./workspace` | 保存原始文档、哈希、清单与抽取定位映射 |
-| **Skill 输出** | `--output-dir`，默认 `workspace/skills/<name>` | build 编译生成的 Skill 目录 |
+| **输入文档** | 建议 `input/`，也可由命令行直接指定任意路径 | analyze / build / batch 的 `sources` 参数 |
+| **AnalysisBundle** | `--bundle-dir <dir>`，默认 `output/bundles/` | 自动命名为 `bundle_<输入文件名>.json`；重名时追加序号 |
+| **Raw / Schema / 缓存** | `--data-home <dir>`，默认 `output/workspace/` | 保存原始文档、哈希、清单、定位映射、Schema 与本地 LLM 缓存 |
+| **Skill 输出** | `--output-dir <dir>`，默认 `output/skills/<name>` | build 编译生成的 Skill 目录；`--output-dir` 是最终 Skill 目录本身 |
 
 `--data-home` 内 Raw 的目录结构为：
 
@@ -206,10 +208,10 @@ Book2Skill 对文件位置采用「**显式路径优先 + 默认值兜底**」�
         └── extraction-map.jsonl  # 原文分块 → 页面/段落定位映射
 ```
 
-- **AnalysisBundle**：`analyze --json` 输出到**标准输出**，用 `>` 重定向到任意文件（如 `bundle.json`）。
-- **随命令落盘的产物**：指定 `--data-home` 后，Raw / Schema 树会写入该目录；指令类数据（install 备份）默认写入 `~/.book2skill/backups/`。
+- **AnalysisBundle**：`analyze`、`batch` 和从源文档执行的 `build` 会自动写入 `output/bundles/`；`--json` 的标准输出保持不变。
+- **随命令落盘的产物**：默认 Raw / Schema 树写入 `output/workspace/`；指令类数据（install 备份）默认写入 `~/.book2skill/backups/`。
 
-> 生产使用建议显式传入 `--data-home ./workspace` 等持久目录；纯验证可用默认内存模式，不产生任何文件。
+> 运行目录决定相对路径。发布包场景请先进入安装根目录再执行命令，避免把 `output/` 建在其他项目中。
 
 ## 快速上手
 
@@ -218,7 +220,7 @@ Book2Skill 对文件位置采用「**显式路径优先 + 默认值兜底**」�
 分析文档，输出结构化 AnalysisBundle（不生成 Skill），适合人工审核：
 
 ```bash
-book2skill analyze book.pdf --json > bundle.json
+book2skill analyze input/my-book.pdf --json
 ```
 
 ### 2. Full Build — 从源文档编译 Skill
@@ -226,48 +228,45 @@ book2skill analyze book.pdf --json > bundle.json
 一步从文档编译为完整 Skill 目录：
 
 ```bash
-book2skill build book.pdf \
+book2skill build input/my-book.pdf \
   --name my-skill \
   --description "What this skill does, when to use it." \
-  --use-when "When you need X." \
-  --data-home ./workspace \
-  --output-dir ./skills
+  --use-when "When you need X."
 ```
 
 ### 3. Build from Analysis — 从分析结果编译
 
-先审核 `bundle.json`，再编译：
+先审核 `output/bundles/bundle_my-book.json`，再编译：
 
 ```bash
-book2skill build --from-analysis bundle.json \
+book2skill build --from-analysis output/bundles/bundle_my-book.json \
   --name my-skill \
   --description "..." \
-  --use-when "..." \
-  --output-dir ./skills
+  --use-when "..."
 ```
 
 ### 4. 验证 Skill 质量
 
 ```bash
-book2skill validate skills/my-skill          # 只读校验
-book2skill validate skills/my-skill --write   # 写入 quality-report
-book2skill validate skills/my-skill --json     # JSON 输出
+book2skill validate output/skills/my-skill          # 只读校验
+book2skill validate output/skills/my-skill --write  # 写入 quality-report
+book2skill validate output/skills/my-skill --json   # JSON 输出
 ```
 
 ### 5. 部署 Skill 到宿主
 
 ```bash
 # 安装到 Claude Code（个人级）
-book2skill install skills/my-skill --host claude
+book2skill install output/skills/my-skill --host claude
 
 # 安装到项目目录
-book2skill install skills/my-skill --host project --project-root ./my-project
+book2skill install output/skills/my-skill --host project --project-root ./my-project
 
 # 安装到 Codex（含 agents.md overlay）
-book2skill install skills/my-skill --host codex --project-level
+book2skill install output/skills/my-skill --host codex --project-level
 
 # dry-run 预览
-book2skill install skills/my-skill --host claude --dry-run --json
+book2skill install output/skills/my-skill --host claude --dry-run --json
 
 # 卸载
 book2skill uninstall my-skill --host claude
@@ -277,13 +276,13 @@ book2skill uninstall my-skill --host claude
 
 ```bash
 # 预览差异（dry-run）
-book2skill update --data-home ./workspace --collection-id col-xxx --name my-skill --use-when "..." 
+book2skill update --data-home ./output/workspace --collection-id col-xxx --name my-skill --use-when "..."
 
 # 确认发布
-book2skill update --data-home ./workspace --collection-id col-xxx --confirm
+book2skill update --data-home ./output/workspace --collection-id col-xxx --confirm
 
 # 回滚
-book2skill update --data-home ./workspace --rollback
+book2skill update --data-home ./output/workspace --rollback
 ```
 
 ## 接入大模型（可选）
@@ -341,7 +340,7 @@ LLM_MODEL=qwen-plus
 配置好 `.env` 后，直接运行即可，无需任何 `--llm*` 参数：
 
 ```bash
-book2skill analyze input/my-book.pdf --json > bundle.json
+book2skill analyze input/my-book.pdf --json
 ```
 
 ### 引入 API Key 的其他方式
@@ -411,8 +410,8 @@ book2skill analyze input/my-book.pdf \
 
 | 命令 | 说明 | 关键选项 |
 |------|------|---------|
-| `analyze` | 分析文档，输出 AnalysisBundle | `--json`, `--data-home`, `--collection-id`, `--llm` |
-| `batch` | 批处理多文件，故障隔离 | `--json`, `--data-home`, `--max-workers`, `--checkpoint`, `--resume`, `--llm` |
+| `analyze` | 分析文档，自动保存 AnalysisBundle | `--json`, `--bundle-dir`, `--data-home`, `--collection-id`, `--llm` |
+| `batch` | 批处理多文件，故障隔离并逐文件保存 Bundle | `--json`, `--bundle-dir`, `--data-home`, `--max-workers`, `--checkpoint`, `--resume`, `--llm` |
 | `build` | Full Build 或 Build from Analysis | `--from-analysis`, `--name`, `--description`, `--use-when`, `--output-dir`, `--data-home` |
 | `diff` | 比较两个集合的差异 | `--data-home`, `--collection-id`, `--merge`, `--json` |
 | `update` | 增量更新已发布 Skill | `--data-home`, `--collection-id`, `--confirm`, `--rollback`, `--json` |
@@ -498,7 +497,7 @@ Book2Skill 生成的 Skill 可安装到 5 个宿主：
 | ChatGPT | `chatgpt` | `.chatgpt/skills/<name>/` | Staging 目录，手动上传 |
 | 通用项目 | `project` | `skills/<name>/` | 可配 `--target-dir` |
 
-所有宿主：升级前自动备份旧版本到 `~/.book2skill/backups/`，卸载只删除 Skill 目录（不触碰 workspace/raw/backups）。
+所有宿主：升级前自动备份旧版本到 `~/.book2skill/backups/`，卸载只删除 Skill 目录（不触碰 `output/workspace/raw` 或备份）。
 
 详见 [SKILL_DEPLOYMENT.md](SKILL_DEPLOYMENT.md)。
 

@@ -15,6 +15,13 @@ book2skill-core-<version>/
 ├── release-manifest.json
 ├── checksums.sha256
 ├── install.py
+├── input/
+│   └── README.md
+├── output/
+│   ├── README.md
+│   ├── bundles/.gitkeep
+│   ├── skills/.gitkeep
+│   └── workspace/.gitkeep
 ├── dist/
 │   └── book2skill-<version>-py3-none-any.whl
 ├── skills/
@@ -45,12 +52,16 @@ book2skill-core-<version>/
 
 1. 创建或使用独立 Python 环境并安装 Wheel；
 2. 初始化 `BOOK2SKILL_HOME`；
-3. 安装 Book2Skill 元 Skill；
-4. 初始化扩展注册表；
-5. 执行 `book2skill doctor`；
-6. 输出安装位置、版本、回滚和卸载说明。
+3. 创建 `input/`、`output/bundles/`、`output/skills/` 与
+   `output/workspace/`；
+4. 安装 Book2Skill 元 Skill；
+5. 初始化扩展注册表；
+6. 执行 `book2skill doctor`；
+7. 输出安装位置、版本、输入目录、输出目录、回滚和卸载说明。
 
-默认数据根建议：Windows `%LOCALAPPDATA%/Book2Skill`，macOS `~/Library/Application Support/Book2Skill`，Linux `~/.local/share/book2skill`，用户可以通过 `BOOK2SKILL_HOME` 覆盖。
+默认运行数据根为 `BOOK2SKILL_HOME/output/workspace`；用户可以通过
+`--data-home` 覆盖。安装根默认为 `~/.book2skill`，也可通过
+`BOOK2SKILL_HOME` 覆盖。
 
 ## 4. Release Manifest
 
@@ -61,5 +72,6 @@ book2skill-core-<version>/
 - 在干净环境完成安装、基础转换、扩展 fixture、升级和卸载测试；
 - `checksums.sha256` 覆盖除自身外的全部交付文件；
 - contracts 与 Wheel 内公开模型一致；
-- ZIP 不含电子书、工作区数据、密钥、缓存、构建临时物或未授权源码；
+- ZIP 不含电子书、工作区数据、密钥、缓存、构建临时物或未授权源码；仅允许
+  `input/`、`output/` 的空目录占位/说明文件；
 - 未执行的宿主真实测试必须在 release manifest 中如实标明。

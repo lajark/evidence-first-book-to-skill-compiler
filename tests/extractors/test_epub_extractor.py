@@ -133,7 +133,7 @@ def test_extractor_preserves_spine_order(
     # Force the stdlib zip backend so spine order is authoritative.
     import book2skill.extractors.epub_extractor as mod
 
-    monkeypatch.setattr(mod, "extract_with_ebooklib", lambda _p: None)
+    monkeypatch.setattr(mod, "extract_chapters_with_ebooklib", lambda _p: None)
 
     blocks = extractor.extract_text_blocks(source_path)
 
@@ -158,6 +158,26 @@ def test_extractor_handles_single_chapter(
 
     assert len(entries) == 1
     assert entries[0].block_id.endswith("-c1")
+
+
+def test_extractor_keeps_paragraphs_in_their_spine_chapter(
+    tmp_path: Path, extractor: EpubExtractor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blank lines inside XHTML must not become fake LLM chapters."""
+    source_path = tmp_path / "paragraphs.epub"
+    _build_epub(
+        source_path,
+        spine=("ch1",),
+        chapters={"ch1": "<p>First paragraph.</p><p>Second paragraph.</p>"},
+    )
+    import book2skill.extractors.epub_extractor as mod
+
+    monkeypatch.setattr(mod, "extract_chapters_with_ebooklib", lambda _p: None)
+    blocks = extractor.extract_text_blocks(source_path)
+
+    assert len(blocks) == 1
+    assert "First paragraph." in blocks[0].text
+    assert "Second paragraph." in blocks[0].text
 
 
 def test_extractor_rejects_non_zip_file(
@@ -209,7 +229,7 @@ def test_extractor_partial_success_skips_missing_chapter(
     )
     import book2skill.extractors.epub_extractor as mod
 
-    monkeypatch.setattr(mod, "extract_with_ebooklib", lambda _p: None)
+    monkeypatch.setattr(mod, "extract_chapters_with_ebooklib", lambda _p: None)
 
     _manifest, entries = extractor.extract(source_path, source_id="f" * 64)
 
