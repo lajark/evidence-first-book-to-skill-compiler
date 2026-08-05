@@ -184,7 +184,7 @@ class TestIRBuilderBuild:
             }
         ]
 
-    def test_workflow_from_framework_and_principle(self) -> None:
+    def test_workflow_orders_executable_kinds(self) -> None:
         units = [
             _unit(
                 unit_id="fw-1",
@@ -199,17 +199,64 @@ class TestIRBuilderBuild:
             _unit(unit_id="tc-1", kind=UnitKind.TECHNIQUE, content="Use TDD."),
         ]
         ir = IRBuilder(units, _spec()).build()
-        # 2 framework/principle steps + 1 routing step
-        assert len(ir.workflow) == 3
+        # Executable kinds are ordered framework -> technique -> principle,
+        # then a trailing routing step. Technique is no longer buried only in
+        # references; the main workflow is an executable sequence.
+        assert len(ir.workflow) == 4
         assert ir.workflow[0].step.startswith("Framework:")
-        assert ir.workflow[1].step.startswith("Principle:")
-        assert ir.workflow[2].step == "Consult detailed references"
+        assert ir.workflow[1].step.startswith("Technique:")
+        assert ir.workflow[2].step.startswith("Principle:")
+        assert ir.workflow[3].step == "Consult detailed references"
 
-    def test_workflow_synthesized_when_no_framework(self) -> None:
-        units = [_unit(unit_id="tc-1", kind=UnitKind.TECHNIQUE, content="Use TDD.")]
+    def test_workflow_synthesized_when_no_executable_kind(self) -> None:
+        # Only reference-material kinds (case/term/anti_pattern): no step can
+        # be built, so a single routing step is synthesized.
+        units = [
+            _unit(unit_id="cs-1", kind=UnitKind.CASE, content="A case story.")
+        ]
         ir = IRBuilder(units, _spec()).build()
         assert len(ir.workflow) == 1
         assert "references" in ir.workflow[0].step.lower()
+
+    def test_workflow_orders_kinds_in_methodology_order(self) -> None:
+        # Kinds appear in _WORKFLOW_KIND_ORDER regardless of input order:
+        # framework, technique, decision_rule, checklist, principle.
+        units = [
+            _unit(unit_id="pr-1", kind=UnitKind.PRINCIPLE, content="Stay focused."),
+            _unit(unit_id="fw-1", kind=UnitKind.FRAMEWORK, content="Overview."),
+            _unit(unit_id="cl-1", kind=UnitKind.CHECKLIST, content="Check items."),
+            _unit(unit_id="tc-1", kind=UnitKind.TECHNIQUE, content="Do work."),
+            _unit(unit_id="dr-1", kind=UnitKind.DECISION_RULE, content="If X then Y."),
+        ]
+        ir = IRBuilder(units, _spec()).build()
+        steps = [s.step for s in ir.workflow if not s.step.startswith("Consult")]
+        assert [s.split(":", 1)[0] for s in steps] == [
+            "Framework",
+            "Technique",
+            "Decision Rule",
+            "Checklist",
+            "Principle",
+        ]
+
+    def test_reference_material_kinds_excluded_from_workflow(self) -> None:
+        # case/term/anti_pattern are reference material: they appear in
+        # references but never as workflow steps.
+        units = [
+            _unit(unit_id="tc-1", kind=UnitKind.TECHNIQUE, content="A technique."),
+            _unit(unit_id="cs-1", kind=UnitKind.CASE, content="A case."),
+            _unit(unit_id="tm-1", kind=UnitKind.TERM, content="A term."),
+            _unit(
+                unit_id="ap-1",
+                kind=UnitKind.ANTI_PATTERN,
+                content="An anti-pattern.",
+            ),
+        ]
+        ir = IRBuilder(units, _spec()).build()
+        step_kinds = [s.step.split(":", 1)[0] for s in ir.workflow]
+        assert "Technique" in step_kinds
+        assert "Case" not in step_kinds
+        assert "Term" not in step_kinds
+        assert "Anti Pattern" not in step_kinds
 
     def test_references_list_only_for_detail_kinds(self) -> None:
         units = [

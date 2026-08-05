@@ -7,11 +7,16 @@ plus a :class:`SkillSpec` (the human-authored skill shape) and produces a
 
 Splitting strategy (PRD FR-04 + SKILL_AUTHORING_STANDARD §3):
 
-- ``framework`` and ``principle`` units carry the methodology skeleton and
-  become concise ``workflow`` steps in the main file.
-- ``technique`` / ``case`` / ``term`` / ``anti_pattern`` / ``checklist`` /
-  ``decision_rule`` units are detail; they sink into ``references/<kind>.md``
-  via :meth:`IRBuilder.build_references`, keeping the main file within budget.
+- Executable kinds (``framework``, ``technique``, ``decision_rule``,
+  ``checklist``, ``principle``) carry the methodology skeleton and become
+  concise, ordered ``workflow`` steps in the main file so a reader sees an
+  executable sequence, not just a description.
+- ``case`` / ``term`` / ``anti_pattern`` units are reference material; they
+  sink into ``references/<kind>.md`` via :meth:`IRBuilder.build_references`.
+- Every usable unit (including ones also rendered into the workflow) is
+  additionally listed in ``references/provenance.md`` and rendered in its
+  kind's reference file as a detailed view; the workflow is the concise
+  ordered view, references is the deep-dive view.
 
 The builder is pure (no I/O) so it can be unit-tested in isolation. Schema
 conformance is enforced by Pydantic at construction; the optional
@@ -33,12 +38,22 @@ from book2skill.resources import schema_file
 #: Name pattern shared by the Pydantic model and ``skill-ir.schema.json``.
 _SKILL_NAME_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 
-#: Kinds that drive the main-file workflow (concise, methodology-level).
-_WORKFLOW_KINDS: frozenset[UnitKind] = frozenset(
-    {UnitKind.FRAMEWORK, UnitKind.PRINCIPLE}
+#: Kinds rendered as ordered, executable workflow steps in the main file.
+#: ``case`` / ``term`` / ``anti_pattern`` are reference material and stay in
+#: ``references/``; the order here controls how steps appear in SKILL.md:
+#: framework opens, then techniques (the actionable core), decision rules,
+#: checklists, and principles as constraints.
+_WORKFLOW_KIND_ORDER: tuple[UnitKind, ...] = (
+    UnitKind.FRAMEWORK,
+    UnitKind.TECHNIQUE,
+    UnitKind.DECISION_RULE,
+    UnitKind.CHECKLIST,
+    UnitKind.PRINCIPLE,
 )
 
-#: Kinds that sink to ``references/`` as detailed supporting material.
+#: Kinds that sink to ``references/`` as detailed supporting material. This
+#: still includes the executable kinds: the workflow is the concise ordered
+#: view, the per-kind reference file is the detailed view for deep lookup.
 _REFERENCE_KINDS: frozenset[UnitKind] = frozenset(
     {
         UnitKind.TECHNIQUE,
@@ -178,8 +193,11 @@ class IRBuilder:
     """Assemble a :class:`SkillIR` from knowledge units and a :class:`SkillSpec`.
 
     The builder filters out rejected/superseded units, splits the remainder
-    into workflow (framework/principle) and references (detail kinds), and
-    emits an IR plus a reference-content map for the writer.
+    into ordered workflow steps (executable kinds: framework, technique,
+    decision_rule, checklist, principle) and reference material (case, term,
+    anti_pattern), and emits an IR plus a reference-content map for the
+    writer. Executable kinds also get a detailed entry in their per-kind
+    reference file.
     """
 
     def __init__(self, units: list[KnowledgeUnit], spec: SkillSpec) -> None:
@@ -210,9 +228,10 @@ class IRBuilder:
 
         workflow = self._build_workflow(usable)
         if not workflow:
-            # No framework/principle units: synthesize a single routing step so
-            # the IR still satisfies the schema's minItems=1 and the Skill has
-            # a usable entry point.
+            # No executable kinds (framework/technique/decision_rule/checklist/
+            # principle): synthesize a single routing step so the IR still
+            # satisfies the schema's minItems=1 and the Skill has a usable
+            # entry point.
             workflow = [
                 WorkflowStep(
                     step="Apply knowledge from references",
@@ -338,10 +357,17 @@ class IRBuilder:
     def _build_workflow(
         self, units: list[KnowledgeUnit]
     ) -> list[WorkflowStep]:
-        """Turn framework/principle units into concise workflow steps."""
+        """Turn executable kinds into concise, ordered workflow steps.
+
+        Steps appear in ``_WORKFLOW_KIND_ORDER`` order so a reader sees the
+        framework overview first, then the actionable techniques, decision
+        rules, checklists, and principles as constraints. ``case`` / ``term``
+        / ``anti_pattern`` are reference material and stay out of the workflow;
+        a trailing routing step points at every reference file for those.
+        """
         grouped = self._group_by_kind(units)
         steps: list[WorkflowStep] = []
-        for kind in (UnitKind.FRAMEWORK, UnitKind.PRINCIPLE):
+        for kind in _WORKFLOW_KIND_ORDER:
             for u in grouped.get(kind, []):
                 steps.append(
                     WorkflowStep(
