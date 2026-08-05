@@ -56,7 +56,7 @@ slots:
   - slot_id: E1
     rubric_item_id: E1
     kinds: [case, decision_rule, technique]
-    keywords: [场景, 案例, 应对, 方案]
+    keywords: [场景, 案例, 应对, 方案, 处理, 步骤, 四步法]
     min_count: 1
   - slot_id: F1
     rubric_item_id: F1
@@ -66,5 +66,5 @@ slots:
   - slot_id: CASE-PO-01
     rubric_item_id: CASE-PO-01
     kinds: [case, decision_rule, technique]
-    keywords: [场景, 方案, 应对]
+    keywords: [场景, 方案, 应对, 处理, 步骤, 四步法]
     min_count: 1

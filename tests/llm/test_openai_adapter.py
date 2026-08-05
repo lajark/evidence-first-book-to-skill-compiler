@@ -110,6 +110,8 @@ def test_chunk_prompt_requires_actionable_paraphrases() -> None:
     # case + framework-artifact guidance must reach the chunk prompt so
     # scenarios and structured artifacts survive as distinct units.
     assert "`case` candidates" in prompt
+    assert "specific problem, interruption" in prompt
+    assert "both a general `technique` and" in prompt
     assert "tracking table" in prompt
     assert "`framework` candidate" in prompt
 
@@ -147,6 +149,8 @@ def test_synthesis_prompt_guides_case_and_framework_artifacts() -> None:
     artifacts as framework units, not fold them into techniques."""
     prompt = _build_synthesis_prompt("src1", "book", [])
     assert "`case` units (not techniques)" in prompt
+    assert "names a specific situation" in prompt
+    assert "both a technique and a case" in prompt
     assert "tracking table" in prompt
     assert "`framework` unit" in prompt
 
