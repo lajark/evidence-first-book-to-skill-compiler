@@ -214,6 +214,48 @@ def _seed_and_publish(
 
 
 class TestPlan:
+    def test_update_passes_router_adapter_to_analyze_layer(
+        self, tmp_path: Path
+    ) -> None:
+        """Balanced routing must reach the analyze layer.
+
+        Regression: the CLI used to pass ``adapter.config`` to
+        UpdateUseCase, collapsing every Map call onto the default profile.
+        """
+        from book2skill.llm.profiles import (
+            ProviderProfile,
+            ProviderProfileSet,
+        )
+        from book2skill.llm.router import RouterLLMAdapter
+
+        profiles = [
+            ProviderProfile.model_validate(
+                {
+                    "profile_id": "ch-a",
+                    "provider": "mock",
+                    "model": "mock-rule-based-v1",
+                    "api_key_env": "MOCK_A",
+                    "roles": ["map", "synthesis", "skill"],
+                }
+            ),
+            ProviderProfile.model_validate(
+                {
+                    "profile_id": "ch-b",
+                    "provider": "mock",
+                    "model": "mock-rule-based-v1",
+                    "api_key_env": "MOCK_B",
+                    "roles": ["map"],
+                }
+            ),
+        ]
+        profile_set = ProviderProfileSet(
+            profiles=profiles, default_profile="ch-a"
+        )
+        adapter = RouterLLMAdapter(profile_set, data_home=tmp_path / "data")
+        use_case = UpdateUseCase(tmp_path / "data", llm=adapter)
+        assert use_case._analyze._runtime_llm is adapter
+        assert use_case._analyze._llm is adapter
+
     def test_fold_in_adds_and_modifies_without_removing_old_units(
         self, tmp_path: Path
     ) -> None:

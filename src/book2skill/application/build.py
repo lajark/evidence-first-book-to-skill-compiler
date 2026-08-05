@@ -71,6 +71,7 @@ from book2skill.domain import (
     PublishStatus,
     SourceManifest,
 )
+from book2skill.llm.ports import LLMAdapter
 from book2skill.llm.runtime import LLMRuntimeConfig
 from book2skill.storage import FileRawStorage, RawStorage, atomic_write
 from book2skill.storage.schema_storage import KnowledgeSchemaStorage
@@ -82,7 +83,7 @@ from book2skill.validation import (
 
 #: Default output root when the caller does not pass ``output_dir``. Relative
 #: to the process cwd; CLI overrides this with ``--output-dir``.
-_DEFAULT_OUTPUT_ROOT = Path("workspace") / "skills"
+_DEFAULT_OUTPUT_ROOT = Path("output") / "skills"
 
 #: Source version loaded for provenance enrichment. The Analyze pipeline
 #: currently persists version 1; if multi-version raw storage lands later
@@ -129,10 +130,14 @@ class BuildUseCase:
         writer: SkillWriter | None = None,
         data_home: Path | None = None,
         runtime_config: LLMRuntimeConfig | None = None,
+        llm: LLMAdapter | None = None,
     ) -> None:
         self._data_home = data_home.resolve() if data_home else None
+        # Pass the full adapter (e.g. ``RouterLLMAdapter`` for ``balanced``)
+        # so the analyze layer uses multi-channel routing; ``runtime_config``
+        # is the single-channel fallback. Mutually exclusive.
         self._analyze = analyze_use_case or AnalyzeUseCase(
-            data_home=data_home, runtime_config=runtime_config
+            data_home=data_home, runtime_config=runtime_config, llm=llm
         )
         self._schema_storage = schema_storage or (
             KnowledgeSchemaStorage(self._data_home) if self._data_home else None
@@ -167,7 +172,7 @@ class BuildUseCase:
             rights_note: Optional rights-confirmation note forwarded to the
                 Analyze stage.
             output_dir: Where to write the Skill directory. Defaults to
-                ``workspace/skills/<spec.name>`` under the cwd.
+                ``output/skills/<spec.name>`` under the cwd.
             on_progress: Optional stage-progress callback (UI-neutral),
                 forwarded to the Analyze stage and used for the compile tail.
 

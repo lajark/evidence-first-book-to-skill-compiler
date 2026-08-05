@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import types
 from contextvars import ContextVar
@@ -17,18 +18,41 @@ from rich.progress import (
     SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
 )
 
 from book2skill import __version__
-from book2skill.application.progress import ProgressReporter
+from book2skill.application.progress import ProgressEvent, ProgressReporter
 from book2skill.config import Locale, load_env_file, resolve_locale
 from book2skill.extensions.cli import extensions_app
+from book2skill.llm.profiles import ProviderProfileSet
+from book2skill.llm.quality import QualityService
 
 if TYPE_CHECKING:
+    from book2skill.application.models import AnalysisBundle
     from book2skill.llm.ports import LLMAdapter
 
 app = typer.Typer(name="book2skill", help="Book2Skill CLI")
 _active_locale: ContextVar[Locale] = ContextVar("book2skill_locale", default="zh-CN")
+
+#: Runtime artefacts live below one visible root by default.  Paths remain
+#: relative to the command's current working directory so a caller can choose
+#: a project root simply by changing directory before invoking the CLI.
+_DEFAULT_OUTPUT_ROOT = Path("output")
+_DEFAULT_BUNDLE_DIR = _DEFAULT_OUTPUT_ROOT / "bundles"
+_DEFAULT_DATA_HOME = _DEFAULT_OUTPUT_ROOT / "workspace"
+
+_INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_WINDOWS_RESERVED_FILENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+_MAX_BUNDLE_COMPONENT_LENGTH = 120
 
 
 def __getattr__(name: str) -> object:
@@ -83,6 +107,71 @@ def _write_json(payload: object) -> None:
     import json
 
     _write_stdout_utf8(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
+def _safe_bundle_component(value: str) -> str:
+    """Return a readable filename component valid on Windows and POSIX.
+
+    Keep Unicode letters (including Chinese source filenames) intact, but
+    remove characters which would make the same command fail on Windows.
+    """
+    cleaned = _INVALID_FILENAME_CHARS.sub("_", value).strip(". ")
+    if not cleaned or not cleaned.strip("_"):
+        return "analysis"
+    if cleaned.upper() in _WINDOWS_RESERVED_FILENAMES:
+        cleaned += "_"
+    return cleaned[:_MAX_BUNDLE_COMPONENT_LENGTH].rstrip(". ") or "analysis"
+
+
+def _bundle_stem(sources: list[Path], collection_id: str) -> str:
+    """Derive a readable bundle stem from the supplied source arguments."""
+    if not sources:
+        return f"bundle_{_safe_bundle_component(collection_id)}"
+    first = _safe_bundle_component(sources[0].stem or sources[0].name)
+    if len(sources) == 1:
+        return f"bundle_{first}"
+    return f"bundle_{first}_and_{len(sources) - 1}_more"
+
+
+def _next_bundle_path(
+    bundle_dir: Path, *, sources: list[Path], collection_id: str
+) -> Path:
+    """Choose a new bundle filename without replacing an earlier run."""
+    stem = _bundle_stem(sources, collection_id)
+    candidate = bundle_dir / f"{stem}.json"
+    suffix = 2
+    while candidate.exists():
+        candidate = bundle_dir / f"{stem}_{suffix}.json"
+        suffix += 1
+    return candidate
+
+
+def _save_analysis_bundle(
+    bundle: AnalysisBundle, *, sources: list[Path], bundle_dir: Path
+) -> Path:
+    """Atomically persist a user-facing AnalysisBundle under *bundle_dir*."""
+    from book2skill.storage.file_storage import atomic_write
+
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    target = _next_bundle_path(
+        bundle_dir, sources=sources, collection_id=bundle.collection_id
+    )
+    atomic_write(target, bundle.model_dump_json(indent=2))
+    return target
+
+
+def _exit_output_write_failed(
+    exc: OSError, *, json_output: bool, target: Path
+) -> None:
+    """Report a local output failure while keeping JSON stdout parseable."""
+    message = f"Could not write output under {target}: {exc}"
+    _print_diagnostic(
+        f"[red]ERROR[/red] OUTPUT_WRITE_FAILED: {message}",
+        json_output=json_output,
+    )
+    if json_output:
+        _write_json_error(code="OUTPUT_WRITE_FAILED", message=message)
+    raise typer.Exit(code=1)
 
 
 def _write_json_error(
@@ -142,6 +231,7 @@ _STAGE_LABELS: dict[Locale, dict[str, str]] = {
         "extract": "提取文本",
         "structure": "结构分析 (LLM)",
         "candidates": "候选抽取 (LLM)",
+        "synthesis": "分层综合 (LLM)",
         "skills": "Skill 建议 (LLM)",
         "compile": "编译 Skill",
     },
@@ -149,18 +239,66 @@ _STAGE_LABELS: dict[Locale, dict[str, str]] = {
         "extract": "Extracting text",
         "structure": "Analyzing structure (LLM)",
         "candidates": "Extracting candidates (LLM)",
+        "synthesis": "Hierarchical synthesis (LLM)",
         "skills": "Suggesting skills (LLM)",
         "compile": "Compiling skill",
     },
 }
 
+_STATUS_LABELS: dict[Locale, dict[str, str]] = {
+    "zh-CN": {
+        "cached": "缓存命中",
+        "rate_limited": "等待限流",
+        "retrying": "正在重试",
+        "failed": "请求失败",
+    },
+    "en": {
+        "cached": "cache hit",
+        "rate_limited": "rate limited",
+        "retrying": "retrying",
+        "failed": "request failed",
+    },
+}
 
-def _stage_label(stage: str, detail: str) -> str:
+
+def _stage_label(stage: str, detail: str, status: str = "running") -> str:
     """Build the progress-bar description for a stage step."""
     label = _STAGE_LABELS[_active_locale.get()].get(stage, stage)
     if detail:
-        return f"{label}: {detail}"
+        label = f"{label}: {detail}"
+    status_label = _STATUS_LABELS[_active_locale.get()].get(status)
+    if status_label:
+        return f"{label} ({status_label})"
     return label
+
+
+def _format_duration(seconds: float) -> str:
+    """Format a short duration without exposing implementation metrics."""
+    rounded = max(0, round(seconds))
+    minutes, remainder = divmod(rounded, 60)
+    if minutes:
+        return f"{minutes}m {remainder:02d}s"
+    return f"{remainder}s"
+
+
+def _eta_label(event: ProgressEvent) -> str:
+    """Render historical/session ETA as a range, or disclose cold start."""
+    locale = _active_locale.get()
+    if event.eta_seconds is None:
+        return "预计剩余：估算中" if locale == "zh-CN" else "ETA: estimating"
+    lower = event.eta_lower_seconds
+    upper = event.eta_upper_seconds
+    if lower is not None and upper is not None:
+        value = (
+            _format_duration(lower)
+            if round(lower) == round(upper)
+            else f"{_format_duration(lower)}–{_format_duration(upper)}"
+        )
+    else:
+        value = f"~{_format_duration(event.eta_seconds)}"
+    if event.eta_sample_count == 0:
+        value += "（冷启动粗估）" if locale == "zh-CN" else " (cold-start estimate)"
+    return f"预计剩余：{value}" if locale == "zh-CN" else f"ETA: {value}"
 
 
 class _ProgressCtx:
@@ -178,6 +316,9 @@ class _ProgressCtx:
             BarColumn(),
             MofNCompleteColumn(),
             TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(compact=True),
+            TextColumn("[dim]{task.fields[eta]}[/dim]"),
             console=_stderr_console,
             transient=False,
         )
@@ -186,17 +327,61 @@ class _ProgressCtx:
 
     def __enter__(self) -> ProgressReporter:
         self._progress.__enter__()
-        self._task = self._progress.add_task(self._title, total=1)
+        self._task = self._progress.add_task(
+            self._title,
+            total=None,
+            eta=_eta_label(ProgressEvent("", 0, 0)),
+        )
         task_id = self._task
+        active_stage: str | None = None
 
-        def _report(stage: str, current: int, total: int, detail: str = "") -> None:
+        def _render(event: ProgressEvent) -> None:
+            nonlocal active_stage, task_id
             assert task_id is not None
+            description = _stage_label(event.stage, event.detail, event.status)
+            completed = (
+                int(event.work_completed)
+                if event.work_completed is not None
+                else event.current
+            )
+            total = (
+                int(event.work_total)
+                if event.work_total is not None
+                else event.total
+            )
+            if event.mode == "indeterminate":
+                determinate_total: int | None = None
+            elif event.mode in {"estimated", "determinate"}:
+                determinate_total = max(total, 1)
+            else:
+                determinate_total = (
+                    None
+                    if event.current == 0 and event.total <= 1
+                    else max(total, 1)
+                )
+            if event.stage != active_stage:
+                active_stage = event.stage
+                self._progress.remove_task(task_id)
+                task_id = self._progress.add_task(
+                    description,
+                    total=determinate_total,
+                    completed=completed,
+                    eta=_eta_label(event),
+                )
+                self._task = task_id
+                return
             self._progress.update(
                 task_id,
-                description=_stage_label(stage, detail),
-                total=max(total, 1),
-                completed=current,
+                description=description,
+                total=determinate_total,
+                completed=completed,
+                eta=_eta_label(event),
             )
+
+        def _report(stage: str, current: int, total: int, detail: str = "") -> None:
+            _render(ProgressEvent(stage, current, total, detail))
+
+        _report.on_progress_event = _render  # type: ignore[attr-defined]
 
         return _report
 
@@ -215,26 +400,167 @@ def _build_llm_adapter(
     model: str | None = None,
     base_url: str | None = None,
     allow_fallback: bool = False,
+    data_home: Path | None = None,
+    llm_profiles: str | None = None,
+    llm_profile: str | None = None,
+    llm_strategy: str = "single",
 ) -> LLMAdapter:
-    """Resolve the shared runtime and build its auditable adapter."""
+    """Resolve the shared runtime and build its auditable adapter.
+
+    ``balanced`` strategy fans Map work across the profiles in
+    ``llm_profiles``; it requires the profile set. The ``single`` strategy
+    builds one adapter from ``llm_profile`` (or the legacy env resolution).
+    Credentials are always read from profile env-var names or the environment
+    and never enter argv, config, manifests, caches or logs.
+    """
+    from book2skill.llm.profiles import (
+        load_profile_set,
+        profile_to_runtime_config,
+    )
+    from book2skill.llm.router import RouterLLMAdapter
     from book2skill.llm.runtime import (
         LLMRuntimeError,
         build_llm_adapter,
+        default_timing_history_path,
         resolve_runtime_config,
     )
 
+    env_file = load_env_file()
+    if llm_strategy == "balanced":
+        if not llm_profiles:
+            raise typer.BadParameter(
+                "--llm-strategy balanced requires --llm-profiles <path>."
+            )
+        try:
+            profile_set = load_profile_set(llm_profiles)
+        except (LLMRuntimeError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        return RouterLLMAdapter(
+            profile_set,
+            allow_fallback=allow_fallback,
+            locale=_active_locale.get(),
+            data_home=data_home,
+            env_file=env_file,
+        )
+
     try:
-        config = resolve_runtime_config(
-            kind,
-            model=model,
-            base_url=base_url,
+        if llm_profiles:
+            profile_set = load_profile_set(llm_profiles)
+            try:
+                profile = profile_set.profile(llm_profile)
+            except KeyError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            config = profile_to_runtime_config(
+                profile,
+                allow_fallback=allow_fallback,
+                locale=_active_locale.get(),
+                env_file=env_file,
+            )
+        else:
+            config = resolve_runtime_config(
+                kind,
+                model=model,
+                base_url=base_url,
+                allow_fallback=allow_fallback,
+                locale=_active_locale.get(),
+                env_file=env_file,
+            )
+    except (LLMRuntimeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    cache_root = data_home / ".cache" / "llm" if data_home is not None else None
+    timing_history_path = None
+    if config.provider == "openai":
+        timing_history_path = (
+            data_home / ".cache" / "performance-history.json"
+            if data_home is not None
+            else default_timing_history_path()
+        )
+    return build_llm_adapter(
+        config,
+        cache_root=cache_root,
+        timing_history_path=timing_history_path,
+    )
+
+
+def _build_quality_service(
+    *,
+    enabled: bool,
+    mode: str,
+    llm_profiles: str | None,
+    quality_authorization: str | None,
+    budget_calls: int | None,
+    budget_cost: float | None,
+    critic_profile: str | None,
+    arbiter_profile: str | None,
+    allow_fallback: bool,
+    data_home: Path | None,
+) -> QualityService | None:
+    """Build the selective quality reviewer, or ``None`` when disabled.
+
+    ``maximum`` mode requires explicit authorization and a hard budget; the
+    service is never constructed without them (fail-closed). Critics/Arbiter
+    are built from the specified profile ids (or the first ``critic`` role and
+    the ``default_profile`` respectively).
+    """
+    from book2skill.llm.profiles import (
+        load_profile_set,
+        profile_to_runtime_config,
+    )
+    from book2skill.llm.quality import (
+        LLMReviewer,
+        QualityBudget,
+        QualityService,
+    )
+    from book2skill.llm.runtime import RuntimeLLMAdapter
+
+    if not enabled:
+        return None
+    if mode not in {"standard", "maximum"}:
+        raise typer.BadParameter("--quality-mode must be 'standard' or 'maximum'")
+    if mode == "maximum":
+        if not quality_authorization:
+            raise typer.BadParameter(
+                "--quality-mode maximum requires --quality-authorization."
+            )
+        if budget_calls is None and budget_cost is None:
+            raise typer.BadParameter(
+                "--quality-mode maximum requires --quality-budget-calls and/or "
+                "--quality-budget-cost."
+            )
+    if not llm_profiles:
+        raise typer.BadParameter("--quality requires --llm-profiles <path>.")
+    profile_set = load_profile_set(llm_profiles)
+    cache_root = data_home / ".cache" / "llm" if data_home is not None else None
+
+    def build_reviewer(profile_id: str, role: str) -> LLMReviewer:
+        profile = profile_set.profile(profile_id)
+        config = profile_to_runtime_config(
+            profile,
             allow_fallback=allow_fallback,
             locale=_active_locale.get(),
             env_file=load_env_file(),
         )
-    except (LLMRuntimeError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    return build_llm_adapter(config)
+        adapter = RuntimeLLMAdapter(config, cache_root=cache_root)
+        return LLMReviewer(adapter, role=role, model_id=profile.profile_id)  # type: ignore[arg-type]
+
+    critic_id = critic_profile or _first_critic_profile(profile_set)
+    arbiter_id = arbiter_profile or profile_set.default_profile
+    budget = QualityBudget(max_calls=budget_calls, max_cost=budget_cost)
+    return QualityService(
+        critic_reviewer=build_reviewer(critic_id, "critic"),
+        arbiter_reviewer=build_reviewer(arbiter_id, "arbiter"),
+        budget=budget,
+    )
+
+
+def _first_critic_profile(
+    profile_set: ProviderProfileSet,
+) -> str:
+    """Return the first profile able to serve the ``critic`` role."""
+    for profile in profile_set.profiles:
+        if profile.can_serve("critic"):
+            return profile.profile_id
+    return profile_set.default_profile
 
 
 @app.command(name="hello")
@@ -272,10 +598,15 @@ def analyze(
         "--json",
         help="Emit the AnalysisBundle as JSON to stdout.",
     ),
-    data_home: Path | None = typer.Option(
-        None,
+    bundle_dir: Path = typer.Option(
+        _DEFAULT_BUNDLE_DIR,
+        "--bundle-dir",
+        help="Directory for saved AnalysisBundles (default: output/bundles).",
+    ),
+    data_home: Path = typer.Option(
+        _DEFAULT_DATA_HOME,
         "--data-home",
-        help="Directory for raw storage (default: in-memory).",
+        help="Directory for raw/schema/cache data (default: output/workspace).",
     ),
     llm: str | None = typer.Option(
         None,
@@ -303,6 +634,61 @@ def analyze(
         "--allow-llm-fallback",
         help="Explicitly permit deterministic Mock fallback if a real LLM fails.",
     ),
+    llm_profiles: str | None = typer.Option(
+        None,
+        "--llm-profiles",
+        help="Path to a multi-provider profile-set YAML. Each profile reads its "
+        "credential from a named env var; keys never enter the file.",
+    ),
+    llm_profile: str | None = typer.Option(
+        None,
+        "--llm-profile",
+        help="Select one profile_id from the --llm-profiles set "
+        "(default: the set's default_profile).",
+    ),
+    llm_strategy: str = typer.Option(
+        "single",
+        "--llm-strategy",
+        help="Routing strategy: 'single' (default) or 'balanced' (multi-channel "
+        "Map fan-out; requires --llm-profiles).",
+    ),
+    quality: bool = typer.Option(
+        False,
+        "--quality",
+        help="Run selective quality review (Critic/Arbiter) after analysis. "
+        "Requires --llm-profiles.",
+    ),
+    quality_mode: str = typer.Option(
+        "standard",
+        "--quality-mode",
+        help="Quality mode: 'standard' (default) or 'maximum' (requires "
+        "--quality-authorization and a hard budget).",
+    ),
+    quality_authorization: str | None = typer.Option(
+        None,
+        "--quality-authorization",
+        help="Explicit authorization string required for --quality-mode maximum.",
+    ),
+    quality_budget_calls: int | None = typer.Option(
+        None,
+        "--quality-budget-calls",
+        help="Hard cap on quality review calls.",
+    ),
+    quality_budget_cost: float | None = typer.Option(
+        None,
+        "--quality-budget-cost",
+        help="Hard cap on estimated quality review cost (USD).",
+    ),
+    quality_critic_profile: str | None = typer.Option(
+        None,
+        "--quality-critic-profile",
+        help="profile_id used as the quality Critic.",
+    ),
+    quality_arbiter_profile: str | None = typer.Option(
+        None,
+        "--quality-arbiter-profile",
+        help="profile_id used as the quality Arbiter.",
+    ),
 ) -> None:
     """Analyze sources without generating a final Skill (FR-03-1)."""
     from book2skill.application.analyze import AnalyzeUseCase
@@ -314,6 +700,22 @@ def analyze(
         model=llm_model,
         base_url=llm_base_url,
         allow_fallback=allow_llm_fallback,
+        data_home=data_home,
+        llm_profiles=llm_profiles,
+        llm_profile=llm_profile,
+        llm_strategy=llm_strategy,
+    )
+    quality_service = _build_quality_service(
+        enabled=quality,
+        mode=quality_mode,
+        llm_profiles=llm_profiles,
+        quality_authorization=quality_authorization,
+        budget_calls=quality_budget_calls,
+        budget_cost=quality_budget_cost,
+        critic_profile=quality_critic_profile,
+        arbiter_profile=quality_arbiter_profile,
+        allow_fallback=allow_llm_fallback,
+        data_home=data_home,
     )
     use_case = AnalyzeUseCase(data_home=data_home, llm=adapter)
     try:
@@ -323,6 +725,7 @@ def analyze(
                 collection_id=collection_id,
                 rights_note=rights_note,
                 on_progress=on_progress,
+                quality=quality_service,
             )
     except (LLMRuntimeError, DomainError) as exc:
         _emit_fatal_error(exc, json_output=json_output)
@@ -346,6 +749,13 @@ def analyze(
             console.print("[red]No valid sources to analyze.[/red]")
         raise typer.Exit(code=1)
 
+    try:
+        bundle_path = _save_analysis_bundle(
+            result.bundle, sources=sources, bundle_dir=bundle_dir
+        )
+    except OSError as exc:
+        _exit_output_write_failed(exc, json_output=json_output, target=bundle_dir)
+
     if json_output:
         _write_json(result.bundle.model_dump(mode="json"))
     else:
@@ -359,6 +769,7 @@ def analyze(
         console.print(f"  review queue:     {len(b.review_queue)}")
         console.print(f"  conflicts:        {len(b.conflicts)}")
         console.print(f"  suggested skills: {len(b.suggested_skills)}")
+        console.print(f"  analysis bundle:  {bundle_path}")
         if b.review_queue:
             console.print("\n[yellow]Items needing review:[/yellow]")
             for item in b.review_queue:
@@ -387,10 +798,15 @@ def batch(
         "--json",
         help="Emit the BatchResult as JSON to stdout.",
     ),
-    data_home: Path | None = typer.Option(
-        None,
+    bundle_dir: Path = typer.Option(
+        _DEFAULT_BUNDLE_DIR,
+        "--bundle-dir",
+        help="Directory for per-source AnalysisBundles (default: output/bundles).",
+    ),
+    data_home: Path = typer.Option(
+        _DEFAULT_DATA_HOME,
         "--data-home",
-        help="Directory for raw storage (default: in-memory).",
+        help="Directory for raw/schema/cache data (default: output/workspace).",
     ),
     llm: str | None = typer.Option(
         None,
@@ -418,6 +834,24 @@ def batch(
         "--allow-llm-fallback",
         help="Explicitly permit deterministic Mock fallback if a real LLM fails.",
     ),
+    llm_profiles: str | None = typer.Option(
+        None,
+        "--llm-profiles",
+        help="Path to a multi-provider profile-set YAML. Each profile reads its "
+        "credential from a named env var; keys never enter the file.",
+    ),
+    llm_profile: str | None = typer.Option(
+        None,
+        "--llm-profile",
+        help="Select one profile_id from the --llm-profiles set "
+        "(default: the set's default_profile).",
+    ),
+    llm_strategy: str = typer.Option(
+        "single",
+        "--llm-strategy",
+        help="Routing strategy: 'single' (default) or 'balanced' (multi-channel "
+        "Map fan-out; requires --llm-profiles).",
+    ),
     checkpoint: Path | None = typer.Option(
         None,
         "--checkpoint",
@@ -440,6 +874,10 @@ def batch(
         model=llm_model,
         base_url=llm_base_url,
         allow_fallback=allow_llm_fallback,
+        data_home=data_home,
+        llm_profiles=llm_profiles,
+        llm_profile=llm_profile,
+        llm_strategy=llm_strategy,
     )
     use_case = AnalyzeUseCase(data_home=data_home, llm=adapter)
     orchestrator = BatchOrchestrator(use_case=use_case)
@@ -462,6 +900,18 @@ def batch(
         _emit_fatal_error(exc, json_output=json_output)
         raise typer.Exit(code=1) from exc
 
+    saved_bundle_paths: dict[int, Path] = {}
+    try:
+        for index, outcome in enumerate(result.outcomes):
+            if outcome.bundle is not None:
+                saved_bundle_paths[index] = _save_analysis_bundle(
+                    outcome.bundle,
+                    sources=[Path(outcome.path)],
+                    bundle_dir=bundle_dir,
+                )
+    except OSError as exc:
+        _exit_output_write_failed(exc, json_output=json_output, target=bundle_dir)
+
     if json_output:
         import json
 
@@ -476,14 +926,20 @@ def batch(
             f"total: {s.total}, succeeded: {s.succeeded}, "
             f"partial: {s.partial}, failed: {s.failed}, skipped: {s.skipped}"
         )
-        for o in result.outcomes:
+        for index, o in enumerate(result.outcomes):
             if o.status == "success" and o.bundle is not None:
                 console.print(
                     f"  [green]OK[/green]   {o.path} ({o.source_id})"
+                    f" → {saved_bundle_paths[index]}"
                 )
             elif o.status == "partial":
                 console.print(
                     f"  [yellow]PART[/yellow] {o.path} ({o.source_id})"
+                    + (
+                        f" → {saved_bundle_paths[index]}"
+                        if index in saved_bundle_paths
+                        else ""
+                    )
                 )
             else:
                 console.print(f"  [red]FAIL[/red] {o.path} ({o.status})")
@@ -547,12 +1003,17 @@ def build(
         None,
         "--output-dir",
         "-o",
-        help="Output directory for the Skill (default: workspace/skills/<name>).",
+        help="Output directory for the Skill (default: output/skills/<name>).",
     ),
-    data_home: Path | None = typer.Option(
-        None,
+    bundle_dir: Path = typer.Option(
+        _DEFAULT_BUNDLE_DIR,
+        "--bundle-dir",
+        help="Directory for the Full Build AnalysisBundle (default: output/bundles).",
+    ),
+    data_home: Path = typer.Option(
+        _DEFAULT_DATA_HOME,
         "--data-home",
-        help="Directory for raw/schema storage (required with --from-analysis).",
+        help="Directory for raw/schema/cache data (default: output/workspace).",
     ),
     rights_note: str | None = typer.Option(
         None,
@@ -575,6 +1036,24 @@ def build(
         False,
         "--allow-llm-fallback",
         help="Explicitly permit deterministic Mock fallback if a real LLM fails.",
+    ),
+    llm_profiles: str | None = typer.Option(
+        None,
+        "--llm-profiles",
+        help="Path to a multi-provider profile-set YAML. Each profile reads its "
+        "credential from a named env var; keys never enter the file.",
+    ),
+    llm_profile: str | None = typer.Option(
+        None,
+        "--llm-profile",
+        help="Select one profile_id from the --llm-profiles set "
+        "(default: the set's default_profile).",
+    ),
+    llm_strategy: str = typer.Option(
+        "single",
+        "--llm-strategy",
+        help="Routing strategy: 'single' (default) or 'balanced' (multi-channel "
+        "Map fan-out; requires --llm-profiles).",
     ),
 ) -> None:
     """Full Build or Build from Analysis (FR-03-2 / FR-03-3)."""
@@ -608,19 +1087,22 @@ def build(
     except ValueError as exc:
         raise typer.BadParameter(f"Invalid SkillSpec: {exc}") from exc
 
-    runtime = None
+    adapter = None
     if sources:
-        from book2skill.llm.runtime import RuntimeLLMAdapter
-
         adapter = _build_llm_adapter(
             llm,
             model=llm_model,
             base_url=llm_base_url,
             allow_fallback=allow_llm_fallback,
+            data_home=data_home,
+            llm_profiles=llm_profiles,
+            llm_profile=llm_profile,
+            llm_strategy=llm_strategy,
         )
-        assert isinstance(adapter, RuntimeLLMAdapter)
-        runtime = adapter.config
-    use_case = BuildUseCase(data_home=data_home, runtime_config=runtime)
+        assert hasattr(adapter, "config")
+    # Pass the full adapter so ``balanced`` routing fans Map work across
+    # channels; taking adapter.config would collapse to a single channel.
+    use_case = BuildUseCase(data_home=data_home, llm=adapter)
 
     try:
         with _ProgressCtx("Building skill...") as on_progress:
@@ -675,9 +1157,19 @@ def build(
             console.print("[red]Build failed: no valid sources analysed.[/red]")
         raise typer.Exit(code=1)
 
+    bundle_path: Path | None = None
+    if sources and result.bundle is not None:
+        try:
+            bundle_path = _save_analysis_bundle(
+                result.bundle, sources=sources, bundle_dir=bundle_dir
+            )
+        except OSError as exc:
+            _exit_output_write_failed(exc, json_output=json_output, target=bundle_dir)
+
     if json_output:
         payload = {
             "skill_dir": str(result.skill_dir),
+            "bundle_path": str(bundle_path) if bundle_path is not None else None,
             "collection_id": result.collection_id,
             "source_count": len(result.source_manifests),
             "warnings": len(result.errors),
@@ -709,6 +1201,8 @@ def build(
             "  artifacts:        SKILL.md, references/, assets/, "
             "provenance.yml, quality-report.md"
         )
+        if bundle_path is not None:
+            console.print(f"  analysis bundle:  {bundle_path}")
 
 
 @app.command(name="update")
@@ -796,12 +1290,29 @@ def update(
         "--allow-llm-fallback",
         help="Explicitly permit deterministic Mock fallback if a real LLM fails.",
     ),
+    llm_profiles: str | None = typer.Option(
+        None,
+        "--llm-profiles",
+        help="Path to a multi-provider profile-set YAML. Each profile reads its "
+        "credential from a named env var; keys never enter the file.",
+    ),
+    llm_profile: str | None = typer.Option(
+        None,
+        "--llm-profile",
+        help="Select one profile_id from the --llm-profiles set "
+        "(default: the set's default_profile).",
+    ),
+    llm_strategy: str = typer.Option(
+        "single",
+        "--llm-strategy",
+        help="Routing strategy: 'single' (default) or 'balanced' (multi-channel "
+        "Map fan-out; requires --llm-profiles).",
+    ),
 ) -> None:
     """Update / Fold-in a published Skill (FR-03-4)."""
     from book2skill.application.update import UpdateUseCase
     from book2skill.compiler import SkillSpec
     from book2skill.domain.errors import DomainError
-    from book2skill.llm.runtime import RuntimeLLMAdapter
 
     if rollback:
         if new_sources:
@@ -863,9 +1374,15 @@ def update(
         model=llm_model,
         base_url=llm_base_url,
         allow_fallback=allow_llm_fallback,
+        data_home=data_home,
+        llm_profiles=llm_profiles,
+        llm_profile=llm_profile,
+        llm_strategy=llm_strategy,
     )
-    assert isinstance(adapter, RuntimeLLMAdapter)
-    use_case = UpdateUseCase(data_home, runtime_config=adapter.config)
+    assert hasattr(adapter, "config")
+    # Pass the full adapter so ``balanced`` routing fans Map work across
+    # channels; taking adapter.config would collapse to a single channel.
+    use_case = UpdateUseCase(data_home, llm=adapter)
     try:
         result = use_case.execute(
             skill_dir,

@@ -215,6 +215,50 @@ class TestBuildFromSources:
         assert exc_info.value.code == ErrorCode.BUILD_SOURCE_TRACE_INVALID
         assert not (tmp_path / "out").exists()
 
+    def test_build_passes_router_adapter_to_analyze_layer(
+        self, tmp_path: Path
+    ) -> None:
+        """Balanced routing must reach the analyze layer.
+
+        Regression: the CLI used to pass ``adapter.config`` (the default
+        profile's single config) to BuildUseCase, which rebuilt a single
+        channel adapter and collapsed every Map call onto channel-1. The
+        full ``RouterLLMAdapter`` must be threaded through instead.
+        """
+        from book2skill.llm.profiles import (
+            ProviderProfile,
+            ProviderProfileSet,
+        )
+        from book2skill.llm.router import RouterLLMAdapter
+
+        profiles = [
+            ProviderProfile.model_validate(
+                {
+                    "profile_id": "ch-a",
+                    "provider": "mock",
+                    "model": "mock-rule-based-v1",
+                    "api_key_env": "MOCK_A",
+                    "roles": ["map", "synthesis", "skill"],
+                }
+            ),
+            ProviderProfile.model_validate(
+                {
+                    "profile_id": "ch-b",
+                    "provider": "mock",
+                    "model": "mock-rule-based-v1",
+                    "api_key_env": "MOCK_B",
+                    "roles": ["map"],
+                }
+            ),
+        ]
+        profile_set = ProviderProfileSet(
+            profiles=profiles, default_profile="ch-a"
+        )
+        adapter = RouterLLMAdapter(profile_set, data_home=tmp_path)
+        use_case = BuildUseCase(data_home=tmp_path, llm=adapter)
+        assert use_case._analyze._runtime_llm is adapter
+        assert use_case._analyze._llm is adapter
+
     def test_single_txt_produces_skill_directory(self, tmp_path: Path) -> None:
         f = _write_txt(
             tmp_path / "book.txt",
@@ -779,6 +823,8 @@ class TestBuildCLI:
                 "A traceable delivery checklist.",
                 "--output-dir",
                 str(tmp_path / "cli-out"),
+                "--data-home",
+                str(tmp_path / "data"),
             ],
         )
         assert result.exit_code == 0, result.stdout
@@ -787,6 +833,34 @@ class TestBuildCLI:
         rendered = skill_md.read_text(encoding="utf-8")
         assert "- A confirmed implementation brief." in rendered
         assert "- A traceable delivery checklist." in rendered
+
+    def test_build_uses_default_output_layout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        source = _write_txt(tmp_path / "source-book.txt", "Useful source content.")
+        runner = CliRunner()
+
+        result = runner.invoke(
+            app,
+            [
+                "build",
+                str(source),
+                "--name",
+                "source-book-skill",
+                "--description",
+                "A skill whose default output location is predictable.",
+                "--use-when",
+                "When testing the default output layout.",
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert (
+            tmp_path / "output" / "skills" / "source-book-skill" / "SKILL.md"
+        ).is_file()
+        assert (tmp_path / "output" / "bundles" / "bundle_source-book.json").is_file()
+        assert (tmp_path / "output" / "workspace" / "raw").is_dir()
 
     def test_build_from_analysis_succeeds(self, tmp_path: Path) -> None:
         bundle = _bundle()
