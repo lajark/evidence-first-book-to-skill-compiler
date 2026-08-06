@@ -20,7 +20,7 @@ import re
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from book2skill.domain.state import ConflictStatus, KnowledgeStatus
 
@@ -48,6 +48,15 @@ class UnitKind(StrEnum):
     CASE = "case"
     CHECKLIST = "checklist"
     DECISION_RULE = "decision_rule"
+
+
+class EvidenceLevel(StrEnum):
+    """How directly a knowledge unit is supported by its declared sources."""
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    INFERRED = "inferred"
+    USER_ADDED = "user_added"
 
 
 class KnowledgeRef(BaseModel):
@@ -87,6 +96,19 @@ class KnowledgeUnit(BaseModel):
     review_status: KnowledgeStatus
     record_version: int = Field(1, ge=1)
     supersedes: str | None = None
+    evidence_level: EvidenceLevel = EvidenceLevel.PRIMARY
+    evidence_note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_evidence_note(self) -> KnowledgeUnit:
+        if self.evidence_level in {
+            EvidenceLevel.INFERRED,
+            EvidenceLevel.USER_ADDED,
+        } and not self.evidence_note:
+            raise ValueError(
+                "inferred and user_added knowledge units require evidence_note"
+            )
+        return self
 
 
 class ConflictRecord(BaseModel):

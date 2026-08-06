@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillDesignReview",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "skill_name", "advisory_only", "scores",
+    "execution_contract", "findings"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "skill_name": {"type": "string"},
+    "advisory_only": {"const": true},
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trigger_precision", "task_focus", "workflow_executability",
+        "progressive_disclosure", "deterministic_tooling", "failure_boundary",
+        "example_quality"
+      ],
+      "properties": {
+        "trigger_precision": {"type": "integer", "minimum": 0, "maximum": 5},
+        "task_focus": {"type": "integer", "minimum": 0, "maximum": 5},
+        "workflow_executability": {"type": "integer", "minimum": 0, "maximum": 5},
+        "progressive_disclosure": {"type": "integer", "minimum": 0, "maximum": 5},
+        "deterministic_tooling": {"type": "integer", "minimum": 0, "maximum": 5},
+        "failure_boundary": {"type": "integer", "minimum": 0, "maximum": 5},
+        "example_quality": {"type": "integer", "minimum": 0, "maximum": 5}
+      }
+    },
+    "execution_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inputs", "outputs", "preconditions", "invariants",
+        "failure_boundaries", "escalation_paths"
+      ],
+      "properties": {
+        "inputs": {"$ref": "#/$defs/contractFields"},
+        "outputs": {"$ref": "#/$defs/contractFields"},
+        "preconditions": {"type": "array", "items": {"type": "string"}},
+        "invariants": {"type": "array", "items": {"type": "string"}},
+        "failure_boundaries": {
+          "type": "array", "items": {"type": "string"}
+        },
+        "escalation_paths": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "findings": {"type": "array", "items": {"type": "object"}}
+  },
+  "$defs": {
+    "contractFields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field_id", "value_type", "required", "description"],
+        "properties": {
+          "field_id": {"type": "string"},
+          "value_type": {"const": "string"},
+          "required": {"type": "boolean"},
+          "description": {"type": "string"}
+        }
+      }
+    }
+  }
+}

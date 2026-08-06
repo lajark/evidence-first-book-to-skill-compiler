@@ -18,7 +18,21 @@ from __future__ import annotations
 
 from book2skill.validation.budget_check import BudgetCheck
 from book2skill.validation.claim_check import ClaimSafetyCheck
+from book2skill.validation.compatibility import (
+    CompatibilityReport,
+    ExternalToolConfig,
+    ExternalValidationResult,
+    ExternalValidatorRunner,
+    HostCompatibility,
+    ValidationProfile,
+    VerificationLevel,
+    build_compatibility_report,
+    default_external_tools,
+    default_host_compatibility,
+    write_compatibility_report,
+)
 from book2skill.validation.copyright_check import CopyrightCheck
+from book2skill.validation.evidence_check import EvidenceBoundaryCheck
 from book2skill.validation.frontmatter_check import FrontmatterCheck
 from book2skill.validation.injection_check import InjectionCheck
 from book2skill.validation.models import (
@@ -52,9 +66,21 @@ __all__ = [
     "FrontmatterCheck",
     "SourceCheck",
     "CopyrightCheck",
+    "EvidenceBoundaryCheck",
     "InjectionCheck",
     "BudgetCheck",
     "ClaimSafetyCheck",
     "RuntimeScaffoldingCheck",
+    "CompatibilityReport",
+    "ExternalToolConfig",
+    "ExternalValidationResult",
+    "ExternalValidatorRunner",
+    "HostCompatibility",
+    "ValidationProfile",
+    "VerificationLevel",
+    "build_compatibility_report",
+    "default_external_tools",
+    "default_host_compatibility",
+    "write_compatibility_report",
     "evaluate_publication_quality",
 ]

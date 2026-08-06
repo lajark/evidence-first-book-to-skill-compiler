@@ -95,4 +95,37 @@ class TestValidateCommand:
             "budget",
             "claim-safety",
             "runtime-scaffolding",
+            "evidence-boundary",
         }
+
+
+class TestCompatibilityCommand:
+    def test_draft_profile_writes_layered_report(self, tmp_path: Path) -> None:
+        _make_clean_skill(tmp_path)
+
+        result = runner.invoke(
+            app, ["compatibility", str(tmp_path), "--write", "--json"]
+        )
+
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["profile"] == "portable-draft"
+        assert payload["external_results"][0]["status"] == "not_run"
+        assert (tmp_path / "compatibility-report.json").exists()
+
+    def test_release_profile_requires_external_evidence(self, tmp_path: Path) -> None:
+        _make_clean_skill(tmp_path)
+
+        result = runner.invoke(
+            app,
+            [
+                "compatibility",
+                str(tmp_path),
+                "--profile",
+                "portable-release",
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)["status"] == "fail"

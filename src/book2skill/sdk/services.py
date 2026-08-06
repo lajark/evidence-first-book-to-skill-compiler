@@ -12,6 +12,11 @@ import hashlib
 from pathlib import Path
 
 from book2skill.application.gate import DiscoveredFile, Gate, GateError
+from book2skill.application.models import AnalysisBundle
+from book2skill.application.normalized_bundle import (
+    NormalizationResult,
+    normalize_analysis_bundle,
+)
 from book2skill.compiler import ir_builder
 from book2skill.compiler.ir_builder import IRBuilder, SkillIR, SkillSpec
 from book2skill.compiler.skill_writer import SkillWriter
@@ -30,7 +35,13 @@ from book2skill.storage.file_storage import (
     FileWikiStorage,
 )
 from book2skill.storage.ports import RawStorage, SchemaStorage, WikiStorage
-from book2skill.validation import QualityReport, Validator
+from book2skill.validation import (
+    CompatibilityReport,
+    QualityReport,
+    ValidationProfile,
+    Validator,
+    build_compatibility_report,
+)
 
 __all__ = [
     "SourceService",
@@ -38,6 +49,8 @@ __all__ = [
     "StorageService",
     "SkillCompilerService",
     "ValidatorRegistryService",
+    "NormalizationService",
+    "CompatibilityService",
 ]
 
 
@@ -207,3 +220,32 @@ class ValidatorRegistryService:
     def validate(self, skill_dir: str | Path) -> QualityReport:
         """Validate a compiled Skill and return its :class:`QualityReport`."""
         return Validator(Path(skill_dir).resolve()).validate()
+
+
+class NormalizationService:
+    """Expose the stable AnalysisBundle-to-NormalizedBundle boundary."""
+
+    def normalize(self, bundle: AnalysisBundle) -> NormalizationResult:
+        """Return the deterministic snapshot and full compilation units."""
+        return normalize_analysis_bundle(bundle)
+
+
+class CompatibilityService:
+    """Create a layered compatibility report for a compiled Skill."""
+
+    def validate(
+        self,
+        skill_dir: str | Path,
+        *,
+        profile: ValidationProfile = ValidationProfile.PORTABLE_DRAFT,
+        run_external: bool = False,
+    ) -> CompatibilityReport:
+        """Run internal checks and optionally installed external validators."""
+        target = Path(skill_dir).resolve()
+        internal = Validator(target).validate()
+        return build_compatibility_report(
+            target,
+            internal,
+            profile=profile,
+            run_external=run_external,
+        )

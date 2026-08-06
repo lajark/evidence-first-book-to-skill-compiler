@@ -31,6 +31,7 @@ from book2skill.storage.file_storage import atomic_write
 from book2skill.validation.budget_check import BudgetCheck
 from book2skill.validation.claim_check import ClaimSafetyCheck
 from book2skill.validation.copyright_check import CopyrightCheck
+from book2skill.validation.evidence_check import EvidenceBoundaryCheck
 from book2skill.validation.frontmatter_check import FrontmatterCheck
 from book2skill.validation.injection_check import InjectionCheck
 from book2skill.validation.models import (
@@ -56,6 +57,7 @@ _DEFAULT_CHECKS: list[BaseCheck] = [
     # Advisory only: custom templates may provide an equivalent contract with
     # a different heading, so this must not become a required publish check.
     RuntimeScaffoldingCheck(),
+    EvidenceBoundaryCheck(),
 ]
 
 

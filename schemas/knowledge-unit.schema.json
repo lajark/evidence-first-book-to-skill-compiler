@@ -95,6 +95,35 @@
         "string",
         "null"
       ]
+    },
+    "evidence_level": {
+      "enum": [
+        "primary",
+        "secondary",
+        "inferred",
+        "user_added"
+      ],
+      "default": "primary"
+    },
+    "evidence_note": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "evidence_level": {"enum": ["inferred", "user_added"]}
+        },
+        "required": ["evidence_level"]
+      },
+      "then": {
+        "required": ["evidence_note"],
+        "properties": {"evidence_note": {"type": "string", "minLength": 1}}
+      }
+    }
+  ]
 }

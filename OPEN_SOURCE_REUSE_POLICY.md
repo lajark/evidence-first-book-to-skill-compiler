@@ -34,8 +34,19 @@
 
 - `virgiliojr94/book-to-skill`：重点评估格式抽取、四种运行模式、渐进披露、更新与校验。
 - `apple-ouyang/book-to-skill`：重点评估单一任务 Skill、主/子 Skill 路由、真实案例与可执行步骤。
+- `agentskills/agentskills`：作为开放规范与官方参考校验基线；代码与文档可能适用不同许可证，实施时分别锁定并核验。
+- `anthropics/skills`：只参考 Skill 结构、触发与评测方法；不同目录可能存在不同许可，不按仓库整体推定可复制范围。
+- `agent-ecosystem/skill-validator`：优先采用锁版本的外部 CLI 进程集成，不复制实现；其检查只补充项目内部来源、安全和版权质量门。
+- `qomob/SkillCompiler`、`generative-computing/mellea-skills-compiler`、`SJTU-IPADS/SkVM`：仅作 IR、验证、Profiling 和跨模型评测的设计/研究参考，不作为 v1.x 稳定运行依赖。
 
-两者在规格定稿时公开页面显示 MIT License；真正复制代码前仍必须做 Commit 级复核，不得以本文件代替法律与来源检查。
+截至 2026-08-06 的公开页面核验只用于规划，不能代替实施时的 Commit 级复核。任何外部调用、依赖或代码复制前仍须重新锁定 Commit/版本、核验适用文件许可证并完成来源登记；仅引用设计思想时记录 `design_reference`，不得虚构代码移植。
+
+### v1.0.1 实施记录
+
+- Agent Skills 规范锁定到 `217be548739f21d6008915c29aefe320ea1a90af`；
+- `skills-ref==0.1.0` 与 `skill-validator==1.5.6` 只通过可选、锁版本的 CLI 适配器调用；
+- 本轮新增实现均为项目内独立实现，没有复制这些参考项目的源码，因此不新增 selective-port provenance 条目；
+- `scripts/check_provenance.py` 已对既有选择性移植记录重新验证通过。
 
 
 ## 5. 用户自有下游扩展

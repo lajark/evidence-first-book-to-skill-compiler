@@ -1,9 +1,11 @@
 """Public domain exports."""
 
+from book2skill.domain.contracts import DEFAULT_TARGET_SPEC, TargetSpec
 from book2skill.domain.errors import DomainError, ErrorCode
 from book2skill.domain.identifiers import derive_block_id, derive_candidate_unit_id
 from book2skill.domain.knowledge import (
     ConflictRecord,
+    EvidenceLevel,
     KnowledgeCluster,
     KnowledgeRef,
     KnowledgeUnit,
@@ -50,6 +52,7 @@ __all__ = [
     "KnowledgeRef",
     "KnowledgeUnit",
     "ConflictRecord",
+    "EvidenceLevel",
     "ReviewItem",
     "KnowledgeCluster",
     "cluster_units",
@@ -60,4 +63,6 @@ __all__ = [
     "active_view",
     "derive_block_id",
     "derive_candidate_unit_id",
+    "TargetSpec",
+    "DEFAULT_TARGET_SPEC",
 ]

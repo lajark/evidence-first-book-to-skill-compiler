@@ -48,6 +48,18 @@ class CandidateUnit(BaseModel):
         "candidate", "reviewed", "approved", "rejected", "superseded"
     ]
     record_version: int = Field(1, ge=1)
+    evidence_level: Literal["primary", "secondary", "inferred", "user_added"] = (
+        "primary"
+    )
+    evidence_note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_evidence_note(self) -> CandidateUnit:
+        if self.evidence_level in {"inferred", "user_added"} and not self.evidence_note:
+            raise ValueError(
+                "inferred and user_added candidates require evidence_note"
+            )
+        return self
 
 
 #: A reviewer's decision on a candidate unit (OPT-P1-10 quality review).
@@ -91,6 +103,13 @@ class SuggestedSkill(BaseModel):
     name: str
     description: str
     rationale: str
+    task_boundary: Literal["single_task", "multi_task", "unclear"] = "unclear"
+    overlap_with: list[str] = Field(default_factory=list)
+    route_keywords: list[str] = Field(default_factory=list)
+    positive_trigger_examples: list[str] = Field(default_factory=list)
+    negative_trigger_examples: list[str] = Field(default_factory=list)
+    case_refs: list[str] = Field(default_factory=list)
+    split_rationale: str = ""
 
 
 class AnalysisBundle(BaseModel):

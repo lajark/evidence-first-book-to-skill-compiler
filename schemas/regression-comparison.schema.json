@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RegressionComparison",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "baseline_skill", "candidate_skill", "content_stable",
+    "added", "removed", "changed"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "baseline_skill": {"type": "string"},
+    "candidate_skill": {"type": "string"},
+    "content_stable": {"type": "boolean"},
+    "added": {"type": "array", "items": {"type": "string"}},
+    "removed": {"type": "array", "items": {"type": "string"}},
+    "changed": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -53,9 +53,13 @@ from book2skill.application.artifacts import (
     write_compilation_artifact,
 )
 from book2skill.application.bundle_trace import verify_bundle_against_raw
-from book2skill.application.candidates import candidate_to_unit
 from book2skill.application.gate import GateError
 from book2skill.application.models import AnalysisBundle
+from book2skill.application.normalized_bundle import (
+    NormalizedBundle,
+    normalize_analysis_bundle,
+    write_normalized_bundle,
+)
 from book2skill.application.progress import (
     BUILD_STAGE_ORDER,
     STAGE_COMPILE,
@@ -64,6 +68,11 @@ from book2skill.application.progress import (
     weighted_progress,
 )
 from book2skill.application.publisher import SkillMeta
+from book2skill.application.skill_design import (
+    generate_skill_fixtures,
+    review_skill_design,
+    write_skill_design_artifacts,
+)
 from book2skill.compiler import IRBuilder, SkillIR, SkillSpec, SkillWriter
 from book2skill.compiler.ir_builder import WorkflowStep
 from book2skill.compiler.wiki_generator import WikiGenerator
@@ -79,8 +88,11 @@ from book2skill.storage import FileRawStorage, RawStorage, atomic_write
 from book2skill.storage.schema_storage import KnowledgeSchemaStorage
 from book2skill.validation import (
     QualityReportWriter,
+    ValidationProfile,
     Validator,
+    build_compatibility_report,
     evaluate_publication_quality,
+    write_compatibility_report,
 )
 
 #: Default output root when the caller does not pass ``output_dir``. Relative
@@ -109,6 +121,7 @@ class BuildResult:
     source_manifests: list[SourceManifest] = field(default_factory=list)
     errors: list[GateError] = field(default_factory=list)
     artifact: CompilationArtifact | None = None
+    normalized_bundle: NormalizedBundle | None = None
     publication_ready: bool = False
 
 
@@ -322,7 +335,8 @@ class BuildUseCase:
         errors: list[GateError],
     ) -> BuildResult:
         """Persist units, build IR, write Skill directory."""
-        units = [candidate_to_unit(candidate) for candidate in bundle.candidate_units]
+        normalization = normalize_analysis_bundle(bundle)
+        units = normalization.units
         builder = IRBuilder(units, spec)
         ir = builder.build()
         references = builder.build_references()
@@ -355,6 +369,12 @@ class BuildUseCase:
                 source_manifests=source_manifests or None,
                 wiki_files=wiki_files,
             )
+            write_normalized_bundle(skill_dir, normalization.bundle)
+            write_skill_design_artifacts(
+                skill_dir,
+                review_skill_design(bundle, spec, ir),
+                generate_skill_fixtures(bundle, spec, ir),
+            )
         except Exception:
             if staging_dir is not None and staging_dir.exists():
                 self._remove_tree(staging_dir)
@@ -371,6 +391,12 @@ class BuildUseCase:
                     update={"run_id": f"{target_dir.name}-{report.run_id}"}
                 )
             QualityReportWriter(skill_dir).write(report)
+            compatibility = build_compatibility_report(
+                skill_dir,
+                report,
+                profile=ValidationProfile.PORTABLE_DRAFT,
+            )
+            write_compatibility_report(skill_dir, compatibility)
             publication_ready = evaluate_publication_quality(report).publishable
 
             # Persist per-skill metadata before exposing a staged tree.
@@ -451,6 +477,7 @@ class BuildUseCase:
             source_manifests=source_manifests,
             errors=errors,
             artifact=artifact,
+            normalized_bundle=normalization.bundle,
             publication_ready=publication_ready,
         )
 

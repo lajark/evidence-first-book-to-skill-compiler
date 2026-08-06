@@ -18,6 +18,7 @@ from typing import Any
 
 from book2skill.application.models import CandidateUnit
 from book2skill.domain import (
+    EvidenceLevel,
     KnowledgeRef,
     KnowledgeStatus,
     KnowledgeUnit,
@@ -64,6 +65,8 @@ def candidate_to_unit(c: CandidateUnit) -> KnowledgeUnit:
         confidence=c.confidence,
         review_status=status,
         record_version=c.record_version,
+        evidence_level=EvidenceLevel(c.evidence_level),
+        evidence_note=c.evidence_note,
     )
 
 

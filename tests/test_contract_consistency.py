@@ -12,6 +12,14 @@ from pydantic import ValidationError as PydanticValidationError
 from book2skill.application.models import AnalysisBundle
 from book2skill.compiler import SkillIR
 from book2skill.resources import schema_file
+from book2skill.validation import (
+    HostCompatibility,
+    QualityReport,
+    ReportStatus,
+    ValidationProfile,
+    VerificationLevel,
+    build_compatibility_report,
+)
 
 
 def _schema(name: str) -> dict[str, object]:
@@ -49,3 +57,24 @@ def test_skill_ir_usage_requires_only_declared_fields_in_both_contracts() -> Non
         SkillIR.model_validate(payload)
     with pytest.raises(JsonSchemaValidationError):
         validate(instance=payload, schema=_schema("skill-ir.schema.json"))
+
+
+def test_compatibility_report_matches_public_schema(tmp_path) -> None:
+    internal = QualityReport(run_id="run", status=ReportStatus.PASS)
+    report = build_compatibility_report(
+        tmp_path,
+        internal,
+        profile=ValidationProfile.PORTABLE_DRAFT,
+        hosts=[
+            HostCompatibility(
+                host="codex",
+                level=VerificationLevel.INSTALL_SMOKE_PASSED,
+                evidence=["tests.hosts.test_codex_install"],
+            )
+        ],
+    )
+
+    validate(
+        instance=report.model_dump(mode="json"),
+        schema=_schema("compatibility-report.schema.json"),
+    )

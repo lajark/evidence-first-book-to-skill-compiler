@@ -602,6 +602,50 @@ def version() -> None:
     console.print(f"book2skill {__version__}")
 
 
+@app.command(name="normalize")
+def normalize(
+    bundle_path: Path = typer.Argument(
+        ..., help="Reviewed AnalysisBundle JSON to normalize."
+    ),
+    output: Path = typer.Option(
+        Path("normalized-bundle.json"),
+        "--output",
+        "-o",
+        help="Output file or directory for the deterministic snapshot.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit the NormalizedBundle as JSON."
+    ),
+) -> None:
+    """Create the deterministic AnalysisBundle-to-SkillIR boundary snapshot."""
+    from pydantic import ValidationError
+
+    from book2skill.application.models import AnalysisBundle
+    from book2skill.application.normalized_bundle import (
+        normalize_analysis_bundle,
+        write_normalized_bundle,
+    )
+    from book2skill.domain.errors import DomainError
+
+    try:
+        bundle = AnalysisBundle.model_validate_json(
+            bundle_path.read_text(encoding="utf-8")
+        )
+        result = normalize_analysis_bundle(bundle)
+        target = write_normalized_bundle(output, result.bundle)
+    except (OSError, ValidationError, DomainError, ValueError) as exc:
+        message = f"Could not normalize {bundle_path}: {exc}"
+        _print_diagnostic(f"[red]ERROR[/red] {message}", json_output=json_output)
+        if json_output:
+            _write_json_error(code="NORMALIZATION_FAILED", message=message)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _write_json(result.bundle.model_dump(mode="json"))
+    else:
+        console.print(f"[green]Wrote[/green] {target}")
+
+
 @app.command(name="analyze")
 def analyze(
     sources: list[Path] = typer.Argument(
@@ -1662,6 +1706,7 @@ def validate(
         BudgetCheck,
         ClaimSafetyCheck,
         CopyrightCheck,
+        EvidenceBoundaryCheck,
         FrontmatterCheck,
         InjectionCheck,
         QualityReportWriter,
@@ -1678,6 +1723,7 @@ def validate(
         BudgetCheck(),
         ClaimSafetyCheck(),
         RuntimeScaffoldingCheck(),
+        EvidenceBoundaryCheck(),
     ]
 
     try:
@@ -1726,6 +1772,112 @@ def validate(
     # Exit non-zero on failure so CI / scripts can act on it. Warnings are
     # acceptable per PRD FR-07 (``pass_with_warnings``).
     if report.status.value == "fail":
+        raise typer.Exit(code=1)
+
+
+@app.command(name="compatibility")
+def compatibility(
+    skill_dir: Path = typer.Argument(
+        ..., help="Compiled Skill directory to assess."
+    ),
+    profile: str = typer.Option(
+        "portable-draft",
+        "--profile",
+        help="Validation profile: portable-draft or portable-release.",
+    ),
+    run_external: bool = typer.Option(
+        False,
+        "--run-external",
+        help="Run installed, version-locked external validators.",
+    ),
+    write: bool = typer.Option(
+        False,
+        "--write",
+        help="Write compatibility-report.json/.md into the Skill directory.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit the CompatibilityReport as JSON."
+    ),
+) -> None:
+    """Aggregate internal, reference, optional external, and host evidence."""
+    from book2skill.domain.errors import DomainError
+    from book2skill.validation import (
+        ValidationProfile,
+        Validator,
+        build_compatibility_report,
+        write_compatibility_report,
+    )
+
+    try:
+        resolved_profile = ValidationProfile(profile)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "must be portable-draft or portable-release", param_hint="--profile"
+        ) from exc
+
+    try:
+        internal = Validator(skill_dir).validate()
+        report = build_compatibility_report(
+            skill_dir,
+            internal,
+            profile=resolved_profile,
+            run_external=run_external,
+        )
+        written = write_compatibility_report(skill_dir, report) if write else None
+    except (DomainError, OSError) as exc:
+        message = str(exc)
+        _print_diagnostic(f"[red]ERROR[/red] {message}", json_output=json_output)
+        if json_output:
+            _write_json_error(code="COMPATIBILITY_FAILED", message=message)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _write_json(report.model_dump(mode="json"))
+    else:
+        console.print(f"[bold]Compatibility[/bold] — {skill_dir}")
+        console.print(f"  profile: {report.profile.value}")
+        console.print(f"  status:  {report.status.value}")
+        for result in report.external_results:
+            console.print(
+                f"  {result.tool_id}: {result.status.value} ({result.message})"
+            )
+        if written is not None:
+            console.print(f"[green]Wrote[/green] {written[0]}")
+            console.print(f"[green]Wrote[/green] {written[1]}")
+
+    if report.status.value == "fail":
+        raise typer.Exit(code=1)
+
+
+@app.command(name="compare-skill-artifacts")
+def compare_skill_artifacts(
+    baseline_dir: Path = typer.Argument(..., help="Historical Skill directory."),
+    candidate_dir: Path = typer.Argument(..., help="Candidate Skill directory."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit the comparison as JSON."
+    ),
+) -> None:
+    """Compare user-consumed Skill content while ignoring additive reports."""
+    from book2skill.application.regression import compare_skill_dirs
+
+    try:
+        comparison = compare_skill_dirs(baseline_dir, candidate_dir)
+    except (OSError, ValueError) as exc:
+        message = str(exc)
+        _print_diagnostic(f"[red]ERROR[/red] {message}", json_output=json_output)
+        if json_output:
+            _write_json_error(code="REGRESSION_COMPARE_FAILED", message=message)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _write_json(comparison.model_dump(mode="json"))
+    else:
+        status = "stable" if comparison.content_stable else "changed"
+        console.print(f"[bold]Skill content:[/bold] {status}")
+        for category in ("added", "removed", "changed"):
+            values = getattr(comparison, category)
+            if values:
+                console.print(f"  {category}: {', '.join(values)}")
+    if not comparison.content_stable:
         raise typer.Exit(code=1)
 
 

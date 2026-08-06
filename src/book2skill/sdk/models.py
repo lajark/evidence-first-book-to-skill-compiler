@@ -23,12 +23,14 @@ from book2skill.application.models import (
     StructureEntry,
     SuggestedSkill,
 )
+from book2skill.application.normalized_bundle import NormalizedBundle
 from book2skill.compiler.ir_builder import SkillIR, SkillSpec, SkillUsage, WorkflowStep
 from book2skill.domain import (
     Confidentiality,
     ConflictRecord,
     DomainError,
     ErrorCode,
+    EvidenceLevel,
     ExtractionMapEntry,
     KnowledgeCluster,
     KnowledgeRef,
@@ -39,11 +41,13 @@ from book2skill.domain import (
     ReviewItem,
     SourceFormat,
     SourceManifest,
+    TargetSpec,
     TextBlock,
     UnitKind,
 )
 from book2skill.extractors.base import Extractor, ExtractorCapabilities
 from book2skill.storage.ports import RawStorage, SchemaStorage, WikiStorage
+from book2skill.validation.compatibility import CompatibilityReport
 
 __all__ = [
     # domain
@@ -51,6 +55,7 @@ __all__ = [
     "ConflictRecord",
     "DomainError",
     "ErrorCode",
+    "EvidenceLevel",
     "ExtractionMapEntry",
     "KnowledgeCluster",
     "KnowledgeRef",
@@ -62,6 +67,7 @@ __all__ = [
     "SourceFormat",
     "SourceManifest",
     "TextBlock",
+    "TargetSpec",
     "UnitKind",
     # application
     "AnalysisBundle",
@@ -69,11 +75,13 @@ __all__ = [
     "DiscoveredFile",
     "StructureEntry",
     "SuggestedSkill",
+    "NormalizedBundle",
     # compiler
     "SkillIR",
     "SkillSpec",
     "SkillUsage",
     "WorkflowStep",
+    "CompatibilityReport",
     # extractors / storage ports
     "Extractor",
     "ExtractorCapabilities",

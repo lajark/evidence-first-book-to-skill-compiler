@@ -6,7 +6,7 @@ Book2Skill compiles legally usable PDF, EPUB, DOCX, MOBI/AZW, TXT, Markdown, HTM
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-999%20passed%20%2F%201%20skipped-brightgreen.svg)](#testing-and-quality)
+[![Tests](https://img.shields.io/badge/tests-1026%20passed%20%2F%201%20skipped-brightgreen.svg)](#testing-and-quality)
 
 ## What it is
 
@@ -14,7 +14,8 @@ Book2Skill is a local-first document knowledge compiler. It turns reading materi
 
 ```text
 Rights check → immutable Raw + hashes → extraction + locators
-→ AnalysisBundle → Skill IR/Wiki → security and quality gates → atomic publish/deploy
+→ AnalysisBundle → NormalizedBundle → Skill IR/Wiki
+→ security, evidence, and compatibility gates → atomic publish/deploy
 ```
 
 ## What is different from upstream `book-to-skill`
@@ -80,7 +81,7 @@ uv run book2skill hello
 ### Install a built wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.0-py3-none-any.whl
+python -m pip install dist\book2skill-1.0.1-py3-none-any.whl
 book2skill version
 ```
 
@@ -122,9 +123,17 @@ book2skill build --from-analysis output/bundles/bundle_my-book.json \
 book2skill validate output/skills/my-book
 book2skill validate output/skills/my-book --write
 book2skill validate output/skills/my-book --json
+book2skill compatibility output/skills/my-book --write
 ```
 
-Validation covers frontmatter, source coverage, copyright quotes, prompt injection and dangerous links, token budget, high-risk claim wording, and runtime-scaffold integrity.
+Validation covers frontmatter, source coverage, copyright quotes, prompt injection and dangerous links, token budget, high-risk claim wording, runtime-scaffold integrity, and evidence boundaries. Compatibility reports keep internal, optional external-validator, and host evidence separate.
+
+To replay or compare deterministic compilation boundaries:
+
+```bash
+book2skill normalize output/bundles/bundle_my-book.json -o normalized-bundle.json
+book2skill compare-skill-artifacts path/to/v1.0 path/to/v1.0.1 --json
+```
 
 ### Deploy, update, and roll back
 
@@ -174,7 +183,7 @@ input/                              # user-provided documents; do not commit boo
 output/bundles/                     # AnalysisBundle files
 output/skills/<name>/               # final Skill directory
 output/workspace/                   # Raw, Schema, cache, and publish state
-dist/book2skill-1.0.0-*.{whl,tar.gz} # Python distribution artifacts
+dist/book2skill-1.0.1-*.{whl,tar.gz} # Python distribution artifacts
 ```
 
 A generated Skill normally contains:
@@ -184,6 +193,10 @@ SKILL.md                            # main Skill and workflow
 references/                         # knowledge units, Wiki, and source routes
 provenance.yml                      # source manifest and hashes
 quality-report.{md,json}            # validation results
+normalized-bundle.json              # replayable, content-addressed boundary
+skill-design-review.json            # advisory task/execution-boundary review
+skill-fixtures.json                 # trigger and execution regression fixtures
+compatibility-report.{md,json}      # layered spec/tool/host evidence
 ```
 
 ## Format support
@@ -210,7 +223,7 @@ The project does not bypass DRM, download pirated material, require a specific m
 .venv/Scripts/python -m hatchling build
 ```
 
-Latest local verification: **999 passed / 1 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped test covers an optional external tool.
+Latest local verification: **1026 passed / 1 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped test covers an optional external tool.
 
 ## Documentation
 

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CompatibilityReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "target_spec", "profile", "status",
+    "internal_quality_status", "external_results", "hosts"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "target_spec": {"type": "object"},
+    "profile": {"enum": ["portable-draft", "portable-release"]},
+    "status": {"enum": ["pass", "pass_with_warnings", "fail"]},
+    "internal_quality_status": {"enum": ["pass", "pass_with_warnings", "fail"]},
+    "external_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tool_id", "expected_version", "observed_version", "status",
+          "blocking", "exit_code", "message", "evidence"
+        ],
+        "properties": {
+          "tool_id": {"type": "string"},
+          "expected_version": {"type": "string"},
+          "observed_version": {"type": ["string", "null"]},
+          "status": {"enum": ["pass", "warn", "fail", "not_run"]},
+          "blocking": {"type": "boolean"},
+          "exit_code": {"type": ["integer", "null"]},
+          "message": {"type": "string"},
+          "evidence": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "hosts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host", "level", "evidence"],
+        "properties": {
+          "host": {"type": "string"},
+          "level": {
+            "enum": [
+              "not_verified", "structure_validated", "install_smoke_passed",
+              "runtime_verified"
+            ]
+          },
+          "evidence": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

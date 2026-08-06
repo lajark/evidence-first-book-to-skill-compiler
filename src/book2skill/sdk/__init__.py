@@ -16,11 +16,13 @@ from book2skill.sdk.context import ExtensionContext
 from book2skill.sdk.models import (
     AnalysisBundle,
     CandidateUnit,
+    CompatibilityReport,
     Confidentiality,
     ConflictRecord,
     DiscoveredFile,
     DomainError,
     ErrorCode,
+    EvidenceLevel,
     ExtensionDependency,
     ExtensionManifest,
     ExtractionMapEntry,
@@ -32,6 +34,7 @@ from book2skill.sdk.models import (
     KnowledgeUnit,
     Locator,
     LocatorKind,
+    NormalizedBundle,
     RawStorage,
     ReviewItem,
     SchemaStorage,
@@ -42,6 +45,7 @@ from book2skill.sdk.models import (
     SourceManifest,
     StructureEntry,
     SuggestedSkill,
+    TargetSpec,
     TextBlock,
     UnitKind,
     WikiStorage,
@@ -53,7 +57,9 @@ from book2skill.sdk.registrar import (
     ExtensionRegistrar,
 )
 from book2skill.sdk.services import (
+    CompatibilityService,
     ExtractionService,
+    NormalizationService,
     SkillCompilerService,
     SourceService,
     StorageService,
@@ -62,7 +68,7 @@ from book2skill.sdk.services import (
 
 # Independently versioned public surface. Additive changes retain the same
 # major version; incompatible changes require a Core major-version migration.
-SDK_VERSION = "0.1"
+SDK_VERSION = "0.2"
 
 __all__ = [
     "SDK_VERSION",
@@ -72,6 +78,8 @@ __all__ = [
     "StorageService",
     "SkillCompilerService",
     "ValidatorRegistryService",
+    "NormalizationService",
+    "CompatibilityService",
     # context
     "ExtensionContext",
     "ExtensionContributionRegistry",
@@ -87,6 +95,7 @@ __all__ = [
     "DiscoveredFile",
     "DomainError",
     "ErrorCode",
+    "EvidenceLevel",
     "ExtractionMapEntry",
     "Extractor",
     "ExtractorCapabilities",
@@ -98,6 +107,7 @@ __all__ = [
     "LocatorKind",
     "RawStorage",
     "ReviewItem",
+    "NormalizedBundle",
     "SchemaStorage",
     "SkillIR",
     "SkillSpec",
@@ -106,8 +116,10 @@ __all__ = [
     "SourceManifest",
     "StructureEntry",
     "SuggestedSkill",
+    "TargetSpec",
     "TextBlock",
     "UnitKind",
     "WikiStorage",
     "WorkflowStep",
+    "CompatibilityReport",
 ]

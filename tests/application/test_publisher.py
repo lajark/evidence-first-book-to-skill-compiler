@@ -653,6 +653,7 @@ class TestPublish:
             "budget",
             "claim-safety",
             "runtime-scaffolding",
+            "evidence-boundary",
         }
         source_check = next(
             check

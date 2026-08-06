@@ -6,7 +6,7 @@ Book2Skill 将用户合法持有的 PDF、EPUB、DOCX、MOBI/AZW、TXT、Markdow
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-999%20passed%20%2F%201%20skipped-brightgreen.svg)](#测试与质量)
+[![Tests](https://img.shields.io/badge/tests-1026%20passed%20%2F%201%20skipped-brightgreen.svg)](#测试与质量)
 
 ## 这是什么
 
@@ -16,7 +16,8 @@ Book2Skill 是一个本地优先的文档知识编译器。它把一次性阅读
 
 ```text
 合法性确认 → Raw 固化与哈希 → 格式抽取与定位
-→ AnalysisBundle → Skill IR/Wiki → 安全与质量门 → 原子发布/部署
+→ AnalysisBundle → NormalizedBundle → Skill IR/Wiki
+→ 安全、证据和兼容性质量门 → 原子发布/部署
 ```
 
 ## 相比上游 book-to-skill 的创新点
@@ -82,7 +83,7 @@ uv run book2skill hello
 ### 安装已构建 wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.0-py3-none-any.whl
+python -m pip install dist\book2skill-1.0.1-py3-none-any.whl
 book2skill version
 ```
 
@@ -124,9 +125,17 @@ book2skill build --from-analysis output/bundles/bundle_my-book.json \
 book2skill validate output/skills/my-book
 book2skill validate output/skills/my-book --write
 book2skill validate output/skills/my-book --json
+book2skill compatibility output/skills/my-book --write
 ```
 
-校验包括 frontmatter、来源覆盖、版权引文、Prompt Injection/危险链接、Token 预算，以及高风险断言和运行时脚手架完整性提示。
+校验包括 frontmatter、来源覆盖、版权引文、Prompt Injection/危险链接、Token 预算、高风险断言、运行时脚手架和证据边界。兼容报告会分别记录内部检查、可选外部工具与宿主证据。
+
+可重放规范化边界或比较新旧 Skill 正文：
+
+```bash
+book2skill normalize output/bundles/bundle_my-book.json -o normalized-bundle.json
+book2skill compare-skill-artifacts path/to/v1.0 path/to/v1.0.1 --json
+```
 
 ### 5. 部署到 Agent 宿主
 
@@ -182,7 +191,7 @@ input/                         # 用户提供的输入文档（不提交版权�
 output/bundles/                # AnalysisBundle
 output/skills/<name>/          # 最终 Skill 目录
 output/workspace/              # Raw / Schema / 缓存 / 发布状态
-dist/book2skill-1.0.0-*.{whl,tar.gz}  # Python 交付包
+dist/book2skill-1.0.1-*.{whl,tar.gz}  # Python 交付包
 ```
 
 一个 Skill 通常包含：
@@ -192,6 +201,10 @@ SKILL.md                       # 主 Skill 和 Workflow
 references/                    # 知识单元、Wiki、来源引用
 provenance.yml                 # 来源清单和哈希
 quality-report.{md,json}       # 校验结果
+normalized-bundle.json         # 可回放、内容寻址的确定性边界
+skill-design-review.json       # 任务与执行边界建议
+skill-fixtures.json            # 触发与执行回归夹具
+compatibility-report.{md,json} # 规范、工具和宿主分层证据
 ```
 
 ## 格式支持
@@ -218,7 +231,7 @@ quality-report.{md,json}       # 校验结果
 .venv/Scripts/python -m hatchling build
 ```
 
-当前本地验证：**999 passed / 1 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。测试中的一个 skipped 项为可选外部工具场景。
+当前本地验证：**1026 passed / 1 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。测试中的一个 skipped 项为可选外部工具场景。
 
 ## 文档
 

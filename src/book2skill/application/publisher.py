@@ -58,6 +58,15 @@ from book2skill.application.artifacts import (
     verify_compilation_artifact,
     write_compilation_artifact,
 )
+from book2skill.application.normalized_bundle import (
+    normalize_units,
+    write_normalized_bundle,
+)
+from book2skill.application.skill_design import (
+    generate_skill_fixtures,
+    review_skill_design,
+    write_skill_design_artifacts,
+)
 from book2skill.compiler import IRBuilder, SkillSpec, SkillWriter, WikiGenerator
 from book2skill.compiler.token_budget import TokenBudget
 from book2skill.domain import (
@@ -75,8 +84,11 @@ from book2skill.validation import (
     QualityReport,
     QualityReportWriter,
     ReportStatus,
+    ValidationProfile,
     Validator,
+    build_compatibility_report,
     evaluate_publication_quality,
+    write_compatibility_report,
 )
 
 
@@ -249,7 +261,13 @@ class Publisher:
         self._ensure_publishable(skill_dir, spec, units, unresolved_conflicts)
 
         try:
-            self._compile(staging, units, spec, source_manifests)
+            self._compile(
+                staging,
+                units,
+                spec,
+                source_manifests,
+                collection_id=collection_id,
+            )
             self._validate_staging(staging, now)
             self._write_meta(
                 staging,
@@ -614,6 +632,12 @@ class Publisher:
         published_report = report.model_copy(update={"published": True})
         try:
             QualityReportWriter(staging).write(published_report)
+            compatibility = build_compatibility_report(
+                staging,
+                published_report,
+                profile=ValidationProfile.PORTABLE_DRAFT,
+            )
+            write_compatibility_report(staging, compatibility)
         except Exception as exc:  # noqa: BLE001 - normalize publish boundary
             raise DomainError(
                 code=ErrorCode.PUBLISH_FAILED,
@@ -647,6 +671,8 @@ class Publisher:
         units: list[KnowledgeUnit],
         spec: SkillSpec,
         source_manifests: list[SourceManifest],
+        *,
+        collection_id: str,
     ) -> None:
         """Build the IR and write the Skill tree into *staging*.
 
@@ -665,6 +691,35 @@ class Publisher:
             references=references,
             source_manifests=source_manifests,
             wiki_files=wiki_files,
+        )
+        source_ids = [manifest.source_id for manifest in source_manifests]
+        if not source_ids:
+            # Preserve the established publication-gate diagnostic for a
+            # missing provenance ledger. This staging-only fallback lets the
+            # SourceCheck report the authoritative failure; it is never
+            # committed because that check blocks publication.
+            source_ids = sorted(
+                {ref.source_id for unit in units for ref in unit.source_refs}
+            )
+        try:
+            normalization = normalize_units(
+                collection_id=collection_id,
+                source_ids=source_ids,
+                units=units,
+            )
+        except DomainError as exc:
+            raise DomainError(
+                code=ErrorCode.PUBLISH_FAILED,
+                input_id=collection_id,
+                message="The deterministic compilation boundary is invalid.",
+                recovery="Repair source references and retry publication.",
+                details={"normalization_error": exc.code.value},
+            ) from exc
+        write_normalized_bundle(staging, normalization.bundle)
+        write_skill_design_artifacts(
+            staging,
+            review_skill_design(None, spec, ir),
+            generate_skill_fixtures(None, spec, ir),
         )
 
     def _write_meta(
