@@ -45,6 +45,20 @@ CLAUDE.local.md
 .workspace/tmp/
 .workspace/logs/
 .workspace/cache/
+.workspace/
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.example.md
+ACCEPTANCE_TEST_PLAN.md
+GITEE_PRIVATE_REPO.md
+IMPLEMENTATION_PLAN.md
+PACKAGE_MANIFEST.md
+PRD.md
+TASKS.md
+docs/INTEGRATION_REVIEW.md
+docs/M6_ACCEPTANCE_REPORT.md
+docs/P1_ACCEPTANCE_BENCHMARK_BASELINE.md
+docs/P2_PLATFORM_BASELINE.md
 *.pem
 *.key
 

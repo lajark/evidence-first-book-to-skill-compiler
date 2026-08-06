@@ -67,6 +67,38 @@ packages = ["src/book2skill"]
 "templates/generated-skill" = "book2skill/_resources/templates/generated-skill"
 "schemas" = "book2skill/_resources/schemas"
 
+[tool.hatch.build.targets.sdist]
+skip-excluded-dirs = true
+exclude = [
+    "/.workspace",
+    "/workspace",
+    "/output",
+    "/input",
+    "/dist",
+    "/.venv",
+    "/htmlcov",
+    "/.pytest_cache",
+    "/.mypy_cache",
+    "/.ruff_cache",
+    "/.coverage",
+    "/.env",
+    "/.env.*",
+    "/config.local.*",
+    "/llm-profiles.local.*",
+    "/AGENTS.md",
+    "/CLAUDE*",
+    "/ACCEPTANCE_TEST_PLAN.md",
+    "/GITEE_PRIVATE_REPO.md",
+    "/IMPLEMENTATION_PLAN.md",
+    "/PACKAGE_MANIFEST.md",
+    "/PRD.md",
+    "/TASKS.md",
+    "/docs/INTEGRATION_REVIEW.md",
+    "/docs/M6_ACCEPTANCE_REPORT.md",
+    "/docs/P1_ACCEPTANCE_BENCHMARK_BASELINE.md",
+    "/docs/P2_PLATFORM_BASELINE.md",
+]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 88
