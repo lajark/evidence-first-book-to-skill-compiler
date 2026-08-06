@@ -210,7 +210,7 @@ The project does not bypass DRM, download pirated material, require a specific m
 .venv/Scripts/python -m hatchling build
 ```
 
-Latest local verification: **996 passed / 1 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped test covers an optional external tool.
+Latest local verification: **999 passed / 1 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped test covers an optional external tool.
 
 ## Documentation
 
@@ -226,7 +226,3 @@ Latest local verification: **996 passed / 1 skipped**; Ruff, mypy, provenance, a
 ## License and rights
 
 The code is MIT-licensed; see [LICENSE](LICENSE). Use only documents you are legally allowed to process. Do not publicly redistribute a Skill derived from a third-party copyrighted book unless you have the required rights. The user is responsible for source-document rights and downstream distribution.
-
-## Suggested public project name
-
-Suggested GitHub display name: **Evidence-First Book-to-Skill Compiler**. Suggested repository slug: `evidence-first-book-to-skill-compiler`. Keep the Python package and CLI names as `book2skill` for compatibility.

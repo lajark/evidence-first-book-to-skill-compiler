@@ -218,7 +218,7 @@ quality-report.{md,json}       # 校验结果
 .venv/Scripts/python -m hatchling build
 ```
 
-当前本地验证：**996 passed / 1 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。测试中的一个 skipped 项为可选外部工具场景。
+当前本地验证：**999 passed / 1 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。测试中的一个 skipped 项为可选外部工具场景。
 
 ## 文档
 
@@ -234,7 +234,3 @@ quality-report.{md,json}       # 校验结果
 ## 许可证与版权边界
 
 代码采用 MIT，见 [LICENSE](LICENSE)。项目只处理用户合法持有或有权处理的资料；第三方版权书籍生成的 Skill 不应公开发布。生成文件的版权和再分发责任由使用者承担。
-
-## 公开项目名称建议
-
-建议 GitHub 展示名：**Evidence-First Book-to-Skill Compiler**；建议仓库 slug：`evidence-first-book-to-skill-compiler`。保留 Python 包名和 CLI 名 `book2skill`，兼顾公开项目辨识度与现有安装兼容性。
