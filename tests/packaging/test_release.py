@@ -54,8 +54,10 @@ class TestReleasePackage:
                 "release-manifest.json",
                 "checksums.sha256",
                 "install.py",
+                "README.md",
                 "README_INSTALL.md",
                 ".env.example",
+                "llm-profiles.example.yaml",
                 "docs/LLM_CONFIG.md",
                 "input/README.md",
                 "output/README.md",
@@ -69,6 +71,20 @@ class TestReleasePackage:
                 "skills/book2skill-skill.zip",
             ):
                 assert required in names, f"missing {required}"
+
+            assert "llm-profiles.local.yaml" not in names
+
+    def test_public_readme_and_llm_profile_template_match_repository(
+        self, repo_root: Path, tmp_path: Path
+    ) -> None:
+        """Public guidance is shipped verbatim; private local config is excluded."""
+        zip_path, _ = _release(repo_root, tmp_path)
+        with zipfile.ZipFile(zip_path) as zf:
+            assert zf.read("README.md") == (repo_root / "README.md").read_bytes()
+            assert zf.read("llm-profiles.example.yaml") == (
+                repo_root / "llm-profiles.example.yaml"
+            ).read_bytes()
+            assert "llm-profiles.local.yaml" not in _zip_members(zf)
 
     def test_installer_script_is_safe(self, repo_root: Path, tmp_path: Path) -> None:
         """install.py must be syntactically valid and shell-injection-free.

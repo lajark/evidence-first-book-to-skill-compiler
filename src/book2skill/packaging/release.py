@@ -173,11 +173,13 @@ def _copy_static(repo: Path, pkg_root: Path, version: str) -> None:
             shutil.copytree(src, dest)
         else:
             dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-    # Ship the LLM config template + guide so deployments can wire up cloud
-    # models without cloning the source repo. See RELEASE_PACKAGE_SPEC §"LLM".
-    env_template = repo / ".env.example"
-    if env_template.is_file():
-        shutil.copy2(env_template, pkg_root / ".env.example")
+    # Ship public user guidance and config templates verbatim. Local profile
+    # files are intentionally excluded because they belong to each deployment.
+    for filename in ("README.md", ".env.example", "llm-profiles.example.yaml"):
+        source = repo / filename
+        if not source.is_file():
+            raise ReleaseError(f"required release file not found: {source}")
+        shutil.copy2(source, pkg_root / filename)
     llm_guide = repo / "docs" / "LLM_CONFIG.md"
     if llm_guide.is_file():
         docs_target = pkg_root / "docs"
@@ -373,7 +375,8 @@ venv\\Scripts\\book2skill build .\\input\\my-book.pdf `
 
 要使用云端 LLM（OpenAI / 阿里云百炼 / Azure / Ollama 等任何 OpenAI 兼容
 端点），需补装 `llm` 可选依赖并配置 `.env`。本包根目录已随附
-`.env.example` 模板，完整字段与优先级说明见 `docs/LLM_CONFIG.md`。
+`.env.example` 和 `llm-profiles.example.yaml` 模板，完整字段与优先级说明见
+`docs/LLM_CONFIG.md`。
 
 ### 1. 补装 LLM 依赖（在安装好的 venv 内）
 
@@ -409,6 +412,24 @@ LLM_MODEL=qwen-plus
 
 ```
 book2skill analyze input/book.pdf --json
+```
+
+### 多 Provider / balanced 路由（可选）
+
+先复制公开模板，再按本机环境变量名称编辑本地配置；安装器不会创建或覆盖
+`llm-profiles.local.yaml`：
+
+```
+cp llm-profiles.example.yaml llm-profiles.local.yaml       # POSIX
+copy llm-profiles.example.yaml llm-profiles.local.yaml     # Windows CMD
+```
+
+随后运行：
+
+```
+book2skill analyze input/book.pdf \\
+  --llm-profiles llm-profiles.local.yaml \\
+  --llm-strategy balanced --json
 ```
 
 > **位置说明**：`.env` 由内置解析器从当前工作目录向上逐级查找，放在运行
