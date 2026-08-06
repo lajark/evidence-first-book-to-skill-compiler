@@ -16,17 +16,17 @@ slots:
   - slot_id: A3
     rubric_item_id: A3
     kinds: [principle, decision_rule]
-    keywords: [最低要求, 额外完成, 超额, 允许, 上限]
+    keywords: [最低要求, 最低标准, 额外完成, 超额, 允许, 上限, 不可能失败]
     min_count: 1
   - slot_id: A4
     rubric_item_id: A4
     kinds: [principle, framework]
-    keywords: [自我效能, 成功, 反馈, 建立习惯]
+    keywords: [自我效能, 成功, 反馈, 建立习惯, 意志力, 动力]
     min_count: 1
   - slot_id: B1
     rubric_item_id: B1
     kinds: [principle, framework]
-    keywords: [动机不稳定, 意志力有限, 为什么, 机制]
+    keywords: [动机不稳定, 意志力有限, 为什么, 机制, 动力, 意志力]
     min_count: 1
   - slot_id: C1
     rubric_item_id: C1
@@ -36,12 +36,12 @@ slots:
   - slot_id: C2
     rubric_item_id: C2
     kinds: [checklist, technique]
-    keywords: [缩小, 步骤二, 第二步, 缩小]
+    keywords: [缩小, 步骤二, 第二步, 缩小目标, 拆解]
     min_count: 1
   - slot_id: C3
     rubric_item_id: C3
     kinds: [checklist, technique]
-    keywords: [步骤三, 第三步, 确定, 用时]
+    keywords: [步骤三, 第三步, 确定, 用时, 执行依据, 时间, 情境]
     min_count: 1
   - slot_id: C4
     rubric_item_id: C4
@@ -51,12 +51,12 @@ slots:
   - slot_id: C5
     rubric_item_id: C5
     kinds: [checklist, technique]
-    keywords: [步骤五, 第五步, 宗旨, 建立]
+    keywords: [步骤五, 第五步, 宗旨, 建立, 为什么, 价值]
     min_count: 1
   - slot_id: C6
     rubric_item_id: C6
     kinds: [checklist, technique]
-    keywords: [步骤六, 第六步, 奖励, 回报]
+    keywords: [步骤六, 第六步, 奖励, 回报, 庆祝]
     min_count: 1
   - slot_id: C7
     rubric_item_id: C7
@@ -81,15 +81,15 @@ slots:
   - slot_id: E1
     rubric_item_id: E1
     kinds: [case, decision_rule, technique]
-    keywords: [场景, 案例, 诊断, 应对]
+    keywords: [场景, 案例, 诊断, 应对, 作者, 目标, 动力, 疲惫]
     min_count: 1
   - slot_id: F1
     rubric_item_id: F1
     kinds: [term, framework]
-    keywords: [术语, 定义, 概念]
+    keywords: [术语, 定义, 概念, 微习惯]
     min_count: 1
   - slot_id: CASE-MH-01
     rubric_item_id: CASE-MH-01
     kinds: [case, decision_rule, technique]
-    keywords: [场景, 方案, 应对]
+    keywords: [场景, 方案, 应对, 作者, 目标, 行动, 动力, 疲惫]
     min_count: 1

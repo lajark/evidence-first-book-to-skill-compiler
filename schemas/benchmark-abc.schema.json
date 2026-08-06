@@ -59,7 +59,27 @@
       }
     },
     "profile_ids_used": {"type": "array", "items": {"type": "string"}},
-    "benchmark_score": {"type": ["number", "null"]},
+    "benchmark_score": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "benchmark_evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "benchmark_id",
+        "benchmark_version",
+        "evaluator",
+        "evaluation_date",
+        "confidence",
+        "final_score"
+      ],
+      "properties": {
+        "benchmark_id": {"type": "string", "minLength": 1},
+        "benchmark_version": {"const": "1.0"},
+        "evaluator": {"type": "string", "minLength": 1},
+        "evaluation_date": {"type": "string", "minLength": 1},
+        "confidence": {"enum": ["high", "medium", "low"]},
+        "final_score": {"type": "number", "minimum": 0, "maximum": 100}
+      }
+    },
     "source_error": {"type": ["string", "null"]},
     "notes": {"type": "string"}
   }

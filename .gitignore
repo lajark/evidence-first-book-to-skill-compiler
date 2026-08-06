@@ -25,6 +25,8 @@ secrets/
 workspace/
 output/
 library/raw/
+input/*
+!input/.gitkeep
 *.pdf
 *.epub
 *.mobi

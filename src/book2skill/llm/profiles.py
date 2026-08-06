@@ -78,6 +78,7 @@ class ProviderProfile(BaseModel):
     requests_per_minute: int = Field(default=15, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
     request_timeout_seconds: float = Field(default=30.0, gt=0)
+    streaming: bool = False
     max_retries: int = Field(default=2, ge=0)
     circuit_failure_threshold: int = Field(default=3, ge=1)
     cost_per_million_input_tokens: float | None = Field(default=None, ge=0)
@@ -243,6 +244,7 @@ def profile_to_runtime_config(
         max_concurrent_requests=profile.max_concurrent_requests,
         requests_per_minute=profile.requests_per_minute,
         request_timeout_seconds=profile.request_timeout_seconds,
+        streaming=profile.streaming,
         profile_id=profile.profile_id,
         data_send_policy=profile.data_send_policy,
     )

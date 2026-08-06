@@ -66,6 +66,7 @@
         "requests_per_minute": {"type": "integer", "minimum": 1},
         "tokens_per_minute": {"type": ["integer", "null"], "minimum": 1},
         "request_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "streaming": {"type": "boolean", "default": false},
         "max_retries": {"type": "integer", "minimum": 0},
         "circuit_failure_threshold": {"type": "integer", "minimum": 1},
         "cost_per_million_input_tokens": {

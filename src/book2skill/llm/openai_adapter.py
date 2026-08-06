@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from typing import Any, Literal
 
 from book2skill.domain import TextBlock
-from book2skill.llm.chunking import ChunkItem
+from book2skill.llm.chunking import ChunkItem, estimate_tokens
 from book2skill.llm.runtime import (
     LLMResponseError,
     LLMRuntimeError,
@@ -58,6 +60,7 @@ class OpenAIAdapter:
         temperature: float = 0.2,
         request_timeout_seconds: float = 30.0,
         locale: Literal["zh-CN", "en"] = "zh-CN",
+        streaming: bool = False,
     ) -> None:
         self._model = model
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
@@ -65,6 +68,8 @@ class OpenAIAdapter:
         self._temperature = temperature
         self._request_timeout_seconds = request_timeout_seconds
         self._locale = locale
+        self._streaming = streaming
+        self._telemetry_local = threading.local()
         self._client = self._build_client()
 
     def _build_client(self) -> Any:
@@ -205,40 +210,144 @@ class OpenAIAdapter:
             )
 
     def _chat(self, prompt: str) -> str:
-        """Send a chat completion request, raising on a failed request."""
+        """Send one request, optionally streaming and safely falling back."""
+        if not getattr(self, "_streaming", False):
+            return self._chat_non_streaming(prompt)
+        try:
+            return self._chat_streaming(prompt)
+        except _StreamingUnsupportedError:
+            # Some compatible endpoints reject ``stream=True`` while their
+            # normal chat endpoint remains valid. Retry once without stream;
+            # malformed streamed JSON is deliberately not retried here and
+            # still fails closed in the structured response parser.
+            return self._chat_non_streaming(prompt, stream_fallback=True)
+
+    def _chat_non_streaming(self, prompt: str, *, stream_fallback: bool = False) -> str:
+        """Send a normal completion request and record non-stream telemetry."""
         if self._client is None:
             raise LLMUnavailableError(
                 "The configured OpenAI-compatible provider is unavailable."
             )
         try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a knowledge-extraction assistant. "
-                            "Return ONLY the JSON shape requested by the user, "
-                            "no prose."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=self._temperature,
-                timeout=getattr(self, "_request_timeout_seconds", 30.0),
+            resp = self._create_completion(prompt)
+            content = resp.choices[0].message.content or ""
+            self._set_chat_telemetry(
+                streaming=False,
+                stream_fallback=stream_fallback,
             )
-            return resp.choices[0].message.content or ""
+            return content
         except Exception as exc:
-            # Keep the actionable exception class (timeout, connection, rate
-            # limit, etc.) without serialising provider messages, endpoint
-            # URLs, request bodies, or credentials into user diagnostics.
-            detail = type(exc).__name__
-            status_code = getattr(exc, "status_code", None)
-            if isinstance(status_code, int):
-                detail = f"{detail}, status={status_code}"
-            raise LLMRuntimeError(
-                f"OpenAI-compatible request failed ({detail})"
-            ) from exc
+            raise self._request_error(exc) from exc
+
+    def _chat_streaming(self, prompt: str) -> str:
+        """Collect a streamed response and record token timing metrics."""
+        if self._client is None:
+            raise LLMUnavailableError(
+                "The configured OpenAI-compatible provider is unavailable."
+            )
+        started = time.monotonic()
+        first_token_latency: float | None = None
+        parts: list[str] = []
+        output_tokens: int | None = None
+        try:
+            stream = self._create_completion(prompt, stream=True)
+            for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                provider_tokens = getattr(usage, "completion_tokens", None)
+                if isinstance(provider_tokens, int) and provider_tokens >= 0:
+                    output_tokens = provider_tokens
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None)
+                if not isinstance(content, str) or not content:
+                    continue
+                if first_token_latency is None:
+                    first_token_latency = time.monotonic() - started
+                parts.append(content)
+        except Exception as exc:
+            if _is_streaming_unsupported(exc):
+                raise _StreamingUnsupportedError from exc
+            raise self._request_error(exc) from exc
+
+        content = "".join(parts)
+        elapsed = max(time.monotonic() - started, 1e-9)
+        if output_tokens is None:
+            output_tokens = estimate_tokens(content) if content else 0
+        generation_seconds = max(
+            elapsed - (first_token_latency or 0.0), 1e-9
+        )
+        tokens_per_second = (
+            output_tokens / generation_seconds if output_tokens > 0 else None
+        )
+        self._set_chat_telemetry(
+            streaming=True,
+            stream_fallback=False,
+            first_token_latency_seconds=first_token_latency,
+            output_tokens=output_tokens,
+            output_tokens_per_second=tokens_per_second,
+        )
+        return content
+
+    def _create_completion(self, prompt: str, *, stream: bool | None = None) -> Any:
+        kwargs: dict[str, object] = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a knowledge-extraction assistant. "
+                        "Return ONLY the JSON shape requested by the user, "
+                        "no prose."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": self._temperature,
+            "timeout": getattr(self, "_request_timeout_seconds", 30.0),
+        }
+        if stream is not None:
+            kwargs["stream"] = stream
+        return self._client.chat.completions.create(**kwargs)
+
+    def _set_chat_telemetry(self, **values: float | int | bool | None) -> None:
+        local = getattr(self, "_telemetry_local", None)
+        if local is None:
+            local = threading.local()
+            self._telemetry_local = local
+        local.value = {key: value for key, value in values.items() if value is not None}
+
+    @property
+    def last_chat_telemetry(self) -> dict[str, float | int | bool] | None:
+        """Return metrics from the current thread's last completed request."""
+        value = getattr(getattr(self, "_telemetry_local", None), "value", None)
+        return value if isinstance(value, dict) else None
+
+    @staticmethod
+    def _request_error(exc: Exception) -> LLMRuntimeError:
+        # Keep the actionable exception class/status without serialising
+        # provider messages, endpoint URLs, request bodies, or credentials.
+        detail = type(exc).__name__
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int):
+            detail = f"{detail}, status={status_code}"
+        return LLMRuntimeError(f"OpenAI-compatible request failed ({detail})")
+
+
+class _StreamingUnsupportedError(Exception):
+    """Internal signal for a provider that rejects the streaming parameter."""
+
+
+def _is_streaming_unsupported(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {400, 404, 405, 422}:
+        return True
+    text = f"{type(exc).__name__} {exc}".lower()
+    return "stream" in text and any(
+        marker in text
+        for marker in ("unsupported", "not support", "unexpected", "unknown")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +363,30 @@ def _language_instruction(locale: Literal["zh-CN", "en"]) -> str:
         "Respond strictly in Simplified Chinese (zh-CN). All generated content "
         "and every emitted text field must be written in Chinese."
     )
+
+
+_EVIDENCE_CALIBRATION_GUIDANCE = (
+    "Calibrate every claim to the evidence: never turn a single experiment, "
+    "anecdote, or case into a universal medical, psychological, causal, or "
+    "guaranteed-outcome claim. Preserve uncertainty, conditions, sample limits, "
+    "and source attribution. Do not use absolute guarantees such as 'always', "
+    "'certainly', '必然', '一定', '百战不败', or '每战必败' as operational facts "
+    "unless the source explicitly states the phrase; even then label it as the "
+    "source's claim and state its limitations. For neuroscience, clinical, or "
+    "behavioral research, separate the observed result, the source's interpretation, "
+    "and any operational advice. Attribute study-specific observations to the "
+    "reported population and never write 'proves', 'shows it is responsible', "
+    "'guarantees', '证明', '说明其负责', or '保证' as the model's own conclusion."
+)
+
+_HABIT_EXECUTION_GUIDANCE = (
+    "For habit or behavior-change methods, when the source supports it, preserve "
+    "a callable loop as separate evidence: cue or context -> smallest action -> "
+    "record -> acknowledgement or reward -> non-punitive recovery and adjustment. "
+    "Keep cue, action, reward, tracking, and recovery distinct; do not collapse "
+    "them into a motivational principle and do not invent unsupported cues or "
+    "rewards."
+)
 
 
 def _build_structure_prompt(
@@ -328,7 +461,20 @@ def _build_chunk_prompt(
         "context, the recommended action, and the intended outcome when available. "
         "Do not copy source passages, do not repeat source wording, and never emit "
         "more than 20 consecutive CJK characters or 8 consecutive English words "
-        "from the input. For process-oriented material, preserve order, state "
+        "from the input. A short canonical label is an explicit exception: when "
+        "the source names a chapter, doctrine, method, model, or concept, preserve "
+        "that short label (typically <=12 Chinese characters or <=6 English words) "
+        "alongside the paraphrase and source_refs; this is an index label, not a "
+        "long quote. When source headings name substantive sections, retain the "
+        "heading's short canonical label in at least one supported candidate, but "
+        "never infer a claim from a heading alone. This rule overrides the "
+        "long-quote prohibition: if a named label is evidenced, it MUST appear "
+        "verbatim in the candidate content, preferably as `Label: ...; Meaning: "
+        "...`. Do not replace a named label with a generic synonym. For named "
+        "labels or concepts, a `term` or `principle` index unit is valid even when "
+        "it is not itself a procedure; do not omit it for lacking an action. For "
+        "process-oriented material, "
+        "preserve order, state "
         "changes, decision rules, exceptions, records, and review loops as separate "
         "candidates instead of a generic summary. Treat concrete situations as "
         "separate `case` candidates: each must identify the specific problem, "
@@ -338,12 +484,32 @@ def _build_chunk_prompt(
         "procedure with a concrete situation, emit both a general `technique` and "
         "a distinct `case`; never fold the situation into the technique alone. Do "
         "not invent a scenario or result, and do not label a generic rule as a "
-        "case merely because it has steps. When the source defines a structured "
+        "case merely because it has steps. When the source contains an explicitly "
+        "numbered or ordered procedure, emit each evidenced step as its own "
+        "`technique` or `checklist` candidate, preserve its ordinal in the content, "
+        "and do not compress the full sequence into one framework summary. When a "
+        "source states a minimum, maximum, allowance, overachievement boundary, or "
+        "stop rule, emit that boundary as a separate `decision_rule` with the "
+        "condition and consequence. When the source defines a named concept, emit a "
+        "`term` candidate containing the short canonical name verbatim and a "
+        "concise definition; do not leave "
+        "the definition only as an incidental phrase in a principle. When the "
+        "source defines a structured "
         "artifact "
         "(tracking table, record sheet, template or form), emit it as a "
         "`framework` candidate naming the artifact and its fields, columns or "
         "structure. Context is for interpretation only; do not cite it as an item. "
-        "Return at most 8 candidates for this entire "
+        "For a workflow that requires user input before starting, preserve a "
+        "separate `checklist` or `framework` artifact for the startup questions "
+        "(current activities, available time, urgent constraints, estimate, "
+        "selected activity, and first action) when the source supports them. "
+        "For estimation feedback, preserve a separate record artifact with "
+        "date/activity, estimate, actual, deviation or cause, interruptions, "
+        "and next adjustment when evidenced; do not bury these fields in a "
+        "generic review paragraph. Do not invent source facts: label generic "
+        "execution scaffolding as such and keep source_refs tied to the evidence. "
+        + _EVIDENCE_CALIBRATION_GUIDANCE
+        + " Return at most 8 candidates for this entire "
         "chunk and at most 2 candidates for any one input_id; omit duplicates, "
         "bookkeeping, and weak restatements.\n\n"
         + json.dumps(records, ensure_ascii=False, separators=(",", ":"))
@@ -374,17 +540,59 @@ def _build_synthesis_prompt(
         "unit_id values copied exactly from the input), conditions (array), and "
         "exceptions (array). For method books, make the workflow explicit: "
         "trigger, ordered action, state change or record, exception/interruption "
-        "handling, and review/feedback loop where evidenced. Align units to the "
-        "source's real section headings when provided. Preserve concrete "
+        "handling, and review/feedback loop where evidenced. If evidence contains "
+        "an explicitly numbered or ordered procedure, retain one unit per step in "
+        "source order, keep the ordinal in each content field, and classify the "
+        "sequence as `technique` or `checklist` rather than collapsing it into a "
+        "single framework. Preserve minimum/maximum/allowance/overachievement or "
+        "stop boundaries as separate `decision_rule` units with their conditions "
+        "and consequences. Preserve named concepts as `term` units containing the "
+        "term name and its definition. Align units to the source's real section "
+        "headings when provided. For time-boxed methods, when the source supports "
+        "it, make state transitions explicit (ready, working, short break, long "
+        "break, early completion, unfinished, waiting, external interruption, "
+        "emergency, and day-end review). Model a true emergency branch: assess "
+        "urgency and safety, stop and record incomplete work, switch response, "
+        "and never splice unrelated session fragments. Do not add unsupported "
+        "states. For strategy or decision methods, when evidenced, connect "
+        "objective and constraints to intelligence, options, trigger/stop/exit "
+        "conditions, and review. For books with many named sections, emit a "
+        "compact section-to-topic/function index when evidence permits; do not "
+        "leave substantive headings only in the structure array. "
+        + _HABIT_EXECUTION_GUIDANCE
+        + " Preserve concrete "
         "scenarios or worked examples as `case` units (not techniques): a case "
         "names a specific situation, the response or decision, and the observed "
         "or intended result when evidenced. If the input contains both a reusable "
         "procedure and a concrete situation, preserve both a technique and a case "
         "unit. Do not invent a case when no specific situation is evidenced, and "
-        "do not classify a generic step sequence as a case. When the "
+        "do not classify a generic step sequence as a case. When the source names "
+        "a chapter, doctrine, method, model, or concept, preserve a short canonical "
+        "label (typically <=12 Chinese characters or <=6 English words) alongside "
+        "the paraphrase and source references. This short label is an index anchor, "
+        "not a long quote, and may be copied even though long source wording must "
+        "be paraphrased. This rule overrides the no-quote instruction: if a named "
+        "label appears in any input card, it MUST be carried verbatim into the "
+        "final content, preferably as `Label: ...; Meaning: ...`; do not replace "
+        "it with a generic synonym. Named labels may remain `term` or `principle` "
+        "index units even when they are not procedures. When a source heading "
+        "names a substantive section, retain "
+        "that heading label in at least one supported candidate; never infer a claim "
+        "from a heading alone. When the "
         "source defines a structured artifact (tracking table, record sheet, "
         "template or form), emit a `framework` unit naming the artifact and its "
-        "fields/columns/structure. Do not invent steps, "
+        "fields/columns/structure. When the method starts with a user request, "
+        "preserve a reusable startup clarification checklist as a `checklist` "
+        "or `framework` unit: ask for current activities, available time, urgent "
+        "constraints, estimates, the single selected activity, and the first "
+        "action before starting. When the method uses feedback, preserve an "
+        "explicit estimate-versus-actual review artifact with date, activity, "
+        "estimate, actual, deviation/cause, interruption count, and next "
+        "adjustment. These are execution fields, not extra source claims; only "
+        "include fields grounded by the evidence or clearly mark them as generic "
+        "operating scaffolding. "
+        + _EVIDENCE_CALIBRATION_GUIDANCE
+        + " Do not invent steps, "
         "do not quote source wording, and do not return generic principles.\n\n"
         + anchors
         + json.dumps(candidates, ensure_ascii=False, separators=(",", ":"))

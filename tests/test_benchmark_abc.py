@@ -11,6 +11,7 @@ from scripts.benchmark_abc import (
     _mock_profile_set,
     run_strategy,
 )
+from scripts.benchmark_evaluation import attach_evaluation, load_evaluations
 
 from book2skill.application.models import (
     AnalysisBundle,
@@ -132,6 +133,76 @@ class TestBenchmarkSlots:
         assert coverage["C1"] == 1
         assert missing_slots(coverage, slots) == ["C1"]
 
+    def test_structure_keywords_count_matching_headings(self) -> None:
+        slots = [
+            BenchmarkSlot(
+                slot_id="A1",
+                rubric_item_id="A1",
+                kinds=["principle"],
+                keywords=["chapter"],
+                min_count=2,
+                structure_keywords=["始计", "作战篇"],
+            )
+        ]
+        structure = [
+            StructureEntry(
+                block_id="b1",
+                locator={},
+                heading="第一篇 始计",
+                level=1,
+                text_preview="",
+            ),
+            {
+                "heading": "第二篇 作战篇",
+                "text_preview": "",
+            },
+            {
+                "heading": "无关章节",
+                "text_preview": "",
+            },
+        ]
+        coverage = compute_slot_coverage([], slots, structure=structure)
+        assert coverage["A1"] == 2
+        assert missing_slots(coverage, slots) == []
+
+    def test_structure_evidence_does_not_change_slots_without_opt_in(self) -> None:
+        slots = [
+            BenchmarkSlot(
+                slot_id="A1",
+                rubric_item_id="A1",
+                kinds=["principle"],
+                keywords=["chapter"],
+                min_count=1,
+            )
+        ]
+        structure = [
+            StructureEntry(
+                block_id="b1",
+                locator={},
+                heading="chapter heading",
+                level=1,
+                text_preview="",
+            )
+        ]
+        coverage = compute_slot_coverage([], slots, structure=structure)
+        assert coverage["A1"] == 0
+
+    def test_structure_coverage_is_used_by_quality_gate(self) -> None:
+        slots = [
+            BenchmarkSlot(
+                slot_id="A1",
+                rubric_item_id="A1",
+                kinds=["principle"],
+                keywords=["chapter"],
+                min_count=1,
+                structure_keywords=["始计"],
+            )
+        ]
+        bundle = _bundle()
+        bundle.structure[0].heading = "第一篇 始计"
+        flags = QualityGate.detect(bundle, benchmark_slots=slots)
+        assert not any(f.reason == "benchmark_gap" for f in flags)
+
 
 class TestQualityGateBenchmarkGap:
     def test_missing_slot_flagged(self) -> None:
@@ -236,3 +307,62 @@ class TestBenchmarkAbcReport:
         assert "sk-" not in text
         assert "MOCK_PLACEHOLDER" not in text
         assert "durable constraint" not in text  # source text not echoed
+
+
+class TestBenchmarkEvaluationBackfill:
+    def test_valid_external_score_attaches_without_autoscoring(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "evaluations.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "evaluations": [
+                        {
+                            "book_id": "pomodoro",
+                            "strategy": "single",
+                            "benchmark_id": "book2skill-pomodoro-illustrated-zh-v1",
+                            "benchmark_version": "1.0",
+                            "evaluator": "human-reviewer-1",
+                            "evaluation_date": "2026-08-06",
+                            "confidence": "high",
+                            "final_score": 72.56,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        evaluations = load_evaluations(path)
+        measurement = attach_evaluation(
+            {"book_id": "pomodoro", "strategy": "single"},
+            evaluations[("pomodoro", "single")],
+        )
+
+        assert measurement["benchmark_score"] == 72.6
+        assert measurement["benchmark_evaluation"]["evaluator"] == "human-reviewer-1"
+
+    def test_invalid_or_duplicate_scores_fail_closed(self, tmp_path: Path) -> None:
+        path = tmp_path / "evaluations.json"
+        record = {
+            "book_id": "pomodoro",
+            "strategy": "single",
+            "benchmark_id": "book2skill-pomodoro-illustrated-zh-v1",
+            "benchmark_version": "1.0",
+            "evaluator": "reviewer",
+            "evaluation_date": "2026-08-06",
+            "confidence": "high",
+            "final_score": 72,
+        }
+        path.write_text(json.dumps({"evaluations": [record, record]}), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="duplicate"):
+            load_evaluations(path)
+
+    def test_score_cannot_attach_to_source_error(self) -> None:
+        with pytest.raises(ValueError, match="failed/source-error"):
+            attach_evaluation(
+                {"source_error": "GATE_DAMAGED_FILE"},
+                {"final_score": 10},
+            )

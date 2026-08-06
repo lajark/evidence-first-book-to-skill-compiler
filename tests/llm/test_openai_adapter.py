@@ -8,6 +8,7 @@ typed failure handling for the runtime policy layer.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -114,6 +115,19 @@ def test_chunk_prompt_requires_actionable_paraphrases() -> None:
     assert "both a general `technique` and" in prompt
     assert "tracking table" in prompt
     assert "`framework` candidate" in prompt
+    assert "startup questions" in prompt
+    assert "estimate, actual, deviation" in prompt
+    assert "numbered or ordered procedure" in prompt
+    assert "each evidenced step" in prompt
+    assert "separate `decision_rule`" in prompt
+    assert "named concept" in prompt
+    assert "short canonical label" in prompt
+    assert "not a long quote" in prompt
+    assert "MUST appear" in prompt
+    assert "Label: ...; Meaning" in prompt
+    assert "single experiment, anecdote, or case" in prompt
+    assert "universal medical, psychological, causal" in prompt
+    assert "source's claim and state its limitations" in prompt
 
 
 def test_chunk_prompt_locale_directs_content_language() -> None:
@@ -153,6 +167,23 @@ def test_synthesis_prompt_guides_case_and_framework_artifacts() -> None:
     assert "both a technique and a case" in prompt
     assert "tracking table" in prompt
     assert "`framework` unit" in prompt
+    assert "startup clarification checklist" in prompt
+    assert "estimate-versus-actual review artifact" in prompt
+    assert "one unit per step" in prompt
+    assert "minimum/maximum/allowance" in prompt
+    assert "named concepts as `term` units" in prompt
+    assert "short canonical label" in prompt
+    assert "not a long quote" in prompt
+    assert "MUST be carried verbatim" in prompt
+    assert "Label: ...; Meaning" in prompt
+    assert "single experiment, anecdote, or case" in prompt
+    assert "百战不败" in prompt
+    assert "source's claim and state its limitations" in prompt
+    assert "state transitions explicit" in prompt
+    assert "true emergency branch" in prompt
+    assert "section-to-topic/function index" in prompt
+    assert "observed result, the source's interpretation" in prompt
+    assert "cue or context -> smallest action" in prompt
 
 
 def test_synthesis_prompt_ignores_empty_headings() -> None:
@@ -287,6 +318,64 @@ class TestMockedClient:
 
     def test_llm_returns_malformed_response_error(self) -> None:
         adapter = self._make_adapter_with_mock_client("not valid json")
+        with pytest.raises(LLMResponseError):
+            adapter.extract_candidates("src1", _make_blocks())
+
+    def test_streaming_collects_text_and_token_telemetry(self) -> None:
+        adapter = self._make_adapter_with_mock_client("")
+        adapter._streaming = True
+        adapter._client.chat.completions.create.return_value = iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content='[{"kind":"principle"')
+                        )
+                    ],
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="}]"))],
+                    usage=SimpleNamespace(completion_tokens=4),
+                ),
+            ]
+        )
+
+        assert adapter._chat("return json") == '[{"kind":"principle"}]'
+        kwargs = adapter._client.chat.completions.create.call_args.kwargs
+        assert kwargs["stream"] is True
+        telemetry = adapter.last_chat_telemetry
+        assert telemetry is not None
+        assert telemetry["streaming"] is True
+        assert telemetry["output_tokens"] == 4
+        assert telemetry["first_token_latency_seconds"] >= 0
+        assert telemetry["output_tokens_per_second"] > 0
+
+    def test_streaming_retries_non_streaming_when_endpoint_rejects_stream(self) -> None:
+        class UnsupportedStreamError(Exception):
+            status_code = 400
+
+        adapter = self._make_adapter_with_mock_client("fallback")
+        adapter._streaming = True
+        adapter._client.chat.completions.create.side_effect = [
+            UnsupportedStreamError("stream unsupported"),
+            adapter._client.chat.completions.create.return_value,
+        ]
+
+        assert adapter._chat("return text") == "fallback"
+        calls = adapter._client.chat.completions.create.call_args_list
+        assert calls[0].kwargs["stream"] is True
+        assert "stream" not in calls[1].kwargs
+        telemetry = adapter.last_chat_telemetry
+        assert telemetry == {"streaming": False, "stream_fallback": True}
+
+    def test_streaming_incomplete_json_still_fails_closed(self) -> None:
+        adapter = self._make_adapter_with_mock_client("")
+        adapter._streaming = True
+        adapter._client.chat.completions.create.return_value = iter(
+            [SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="["))])]
+        )
+
         with pytest.raises(LLMResponseError):
             adapter.extract_candidates("src1", _make_blocks())
 

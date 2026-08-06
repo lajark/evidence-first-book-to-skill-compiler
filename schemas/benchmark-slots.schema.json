@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "benchmark-slots.schema.json",
   "title": "BenchmarkSlots",
-  "description": "Offline benchmark-slot expectations per book (OPT-P1-11). A slot is covered when at least min_count candidate units of an allowed kind contain any keyword and carry a source ref.",
+  "description": "Offline benchmark-slot expectations per book (OPT-P1-11). A slot is covered by candidate evidence, or optionally by matching source structure evidence when structure_keywords is declared.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "book_id", "slots"],
@@ -29,7 +29,12 @@
             "minItems": 1,
             "items": {"type": "string", "minLength": 1}
           },
-          "min_count": {"type": "integer", "minimum": 1, "default": 1}
+          "min_count": {"type": "integer", "minimum": 1, "default": 1},
+          "structure_keywords": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          }
         }
       }
     }

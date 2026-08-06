@@ -29,6 +29,7 @@ from pathlib import Path
 from book2skill.domain.errors import DomainError, ErrorCode
 from book2skill.storage.file_storage import atomic_write
 from book2skill.validation.budget_check import BudgetCheck
+from book2skill.validation.claim_check import ClaimSafetyCheck
 from book2skill.validation.copyright_check import CopyrightCheck
 from book2skill.validation.frontmatter_check import FrontmatterCheck
 from book2skill.validation.injection_check import InjectionCheck
@@ -39,6 +40,7 @@ from book2skill.validation.models import (
     QualityReport,
     ReportStatus,
 )
+from book2skill.validation.runtime_scaffolding_check import RuntimeScaffoldingCheck
 from book2skill.validation.source_check import SourceCheck
 
 #: Fixed order so report output is deterministic across runs.
@@ -48,6 +50,12 @@ _DEFAULT_CHECKS: list[BaseCheck] = [
     CopyrightCheck(),
     InjectionCheck(),
     BudgetCheck(),
+    # Advisory only: publication remains governed by the required checks in
+    # publication_gate.py, while claim wording is still visible in reports.
+    ClaimSafetyCheck(),
+    # Advisory only: custom templates may provide an equivalent contract with
+    # a different heading, so this must not become a required publish check.
+    RuntimeScaffoldingCheck(),
 ]
 
 

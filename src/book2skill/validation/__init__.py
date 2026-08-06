@@ -6,7 +6,8 @@ Public entry points:
   a :class:`QualityReport`.
 - :class:`QualityReportWriter` — renders the report as Markdown / JSON.
 - Individual checks: :class:`FrontmatterCheck`, :class:`SourceCheck`,
-  :class:`CopyrightCheck`, :class:`InjectionCheck`, :class:`BudgetCheck`.
+  :class:`CopyrightCheck`, :class:`InjectionCheck`, :class:`BudgetCheck`,
+  :class:`ClaimSafetyCheck`, :class:`RuntimeScaffoldingCheck`.
 
 All checks are read-only; writing the report is opt-in via the CLI
 ``--write`` flag and only ever touches ``quality-report.md`` /
@@ -16,6 +17,7 @@ All checks are read-only; writing the report is opt-in via the CLI
 from __future__ import annotations
 
 from book2skill.validation.budget_check import BudgetCheck
+from book2skill.validation.claim_check import ClaimSafetyCheck
 from book2skill.validation.copyright_check import CopyrightCheck
 from book2skill.validation.frontmatter_check import FrontmatterCheck
 from book2skill.validation.injection_check import InjectionCheck
@@ -33,6 +35,7 @@ from book2skill.validation.publication_gate import (
     evaluate_publication_quality,
 )
 from book2skill.validation.quality_report import QualityReportWriter, Validator
+from book2skill.validation.runtime_scaffolding_check import RuntimeScaffoldingCheck
 from book2skill.validation.source_check import SourceCheck
 
 __all__ = [
@@ -51,5 +54,7 @@ __all__ = [
     "CopyrightCheck",
     "InjectionCheck",
     "BudgetCheck",
+    "ClaimSafetyCheck",
+    "RuntimeScaffoldingCheck",
     "evaluate_publication_quality",
 ]

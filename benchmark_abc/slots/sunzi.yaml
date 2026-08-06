@@ -12,6 +12,7 @@ slots:
     kinds: [principle, framework]
     keywords: [始计, 作战篇, 谋攻篇, 军形篇, 兵势篇, 虚实篇, 军争篇, 九变篇, 行军篇, 地形篇, 九地篇, 火攻篇, 用间篇]
     min_count: 3
+    structure_keywords: [始计, 作战篇, 谋攻篇, 军形篇, 兵势篇, 虚实篇, 军争篇, 九变篇, 行军篇, 地形篇, 九地篇, 火攻篇, 用间篇]
   - slot_id: A2
     rubric_item_id: A2
     kinds: [principle, decision_rule]
@@ -60,7 +61,7 @@ slots:
   - slot_id: F1
     rubric_item_id: F1
     kinds: [term, framework]
-    keywords: [术语, 定义, 概念]
+    keywords: [术语, 定义, 概念, 奇正, 虚实, 势, 形]
     min_count: 1
   - slot_id: CASE-SZ-01
     rubric_item_id: CASE-SZ-01

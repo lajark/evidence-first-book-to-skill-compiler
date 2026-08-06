@@ -16,6 +16,7 @@ from rich.progress import (
     MofNCompleteColumn,
     Progress,
     SpinnerColumn,
+    TaskID,
     TaskProgressColumn,
     TextColumn,
     TimeElapsedColumn,
@@ -272,6 +273,11 @@ def _stage_label(stage: str, detail: str, status: str = "running") -> str:
     return label
 
 
+def _overall_label() -> str:
+    """Return the localized label for the whole-pipeline progress task."""
+    return "总进度" if _active_locale.get() == "zh-CN" else "Overall progress"
+
+
 def _format_duration(seconds: float) -> str:
     """Format a short duration without exposing implementation metrics."""
     rounded = max(0, round(seconds))
@@ -323,7 +329,8 @@ class _ProgressCtx:
             transient=False,
         )
         self._title = title
-        self._task: int | None = None
+        self._task: TaskID | None = None
+        self._overall_task: TaskID | None = None
 
     def __enter__(self) -> ProgressReporter:
         self._progress.__enter__()
@@ -332,12 +339,30 @@ class _ProgressCtx:
             total=None,
             eta=_eta_label(ProgressEvent("", 0, 0)),
         )
+        self._overall_task = self._progress.add_task(
+            _overall_label(),
+            total=100.0,
+            completed=0,
+            eta=_eta_label(ProgressEvent("", 0, 0)),
+        )
         task_id = self._task
         active_stage: str | None = None
 
         def _render(event: ProgressEvent) -> None:
             nonlocal active_stage, task_id
             assert task_id is not None
+            if (
+                self._overall_task is not None
+                and event.overall_completed is not None
+                and event.overall_total is not None
+            ):
+                self._progress.update(
+                    self._overall_task,
+                    description=_overall_label(),
+                    completed=int(event.overall_completed),
+                    total=event.overall_total,
+                    eta=_eta_label(event),
+                )
             description = _stage_label(event.stage, event.detail, event.status)
             completed = (
                 int(event.work_completed)
@@ -361,11 +386,12 @@ class _ProgressCtx:
                 )
             if event.stage != active_stage:
                 active_stage = event.stage
-                self._progress.remove_task(task_id)
-                task_id = self._progress.add_task(
-                    description,
+                self._progress.reset(
+                    task_id,
+                    start=True,
                     total=determinate_total,
                     completed=completed,
+                    description=description,
                     eta=_eta_label(event),
                 )
                 self._task = task_id
@@ -1634,10 +1660,12 @@ def validate(
     from book2skill.domain.errors import DomainError
     from book2skill.validation import (
         BudgetCheck,
+        ClaimSafetyCheck,
         CopyrightCheck,
         FrontmatterCheck,
         InjectionCheck,
         QualityReportWriter,
+        RuntimeScaffoldingCheck,
         SourceCheck,
         Validator,
     )
@@ -1648,6 +1676,8 @@ def validate(
         CopyrightCheck(max_quote_words=max_quote_words),
         InjectionCheck(),
         BudgetCheck(),
+        ClaimSafetyCheck(),
+        RuntimeScaffoldingCheck(),
     ]
 
     try:

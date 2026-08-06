@@ -55,6 +55,13 @@ class TestProfileSetValidation:
         # default when no id given
         assert profiles.profile(None).profile_id == "a"
 
+    def test_streaming_capability_threads_to_runtime_config(self) -> None:
+        profile = _profile(streaming=True)
+        config = profile_to_runtime_config(
+            profile, env_file={"LLM_API_KEY": "test-key"}
+        )
+        assert config.streaming is True
+
     @pytest.mark.parametrize(
         "override,fragment",
         [

@@ -28,6 +28,7 @@ from book2skill.application.models import (
     SuggestedSkill,
 )
 from book2skill.application.progress import (
+    ANALYZE_STAGE_ORDER,
     STAGE_CANDIDATES,
     STAGE_EXTRACT,
     STAGE_SKILLS,
@@ -37,6 +38,7 @@ from book2skill.application.progress import (
     ProgressReporter,
     emit_progress,
     noop_progress,
+    weighted_progress,
 )
 from book2skill.domain import (
     ConflictStatus,
@@ -221,7 +223,10 @@ class AnalyzeUseCase:
         Returns:
             An :class:`AnalyzeResult` with the bundle and/or discovery errors.
         """
-        reporter = on_progress or noop_progress
+        reporter = weighted_progress(
+            on_progress or noop_progress,
+            stages=ANALYZE_STAGE_ORDER,
+        )
         files, gate_errors = self._gate.discover(inputs)
         return self.execute_discovered(
             files,
@@ -250,7 +255,10 @@ class AnalyzeUseCase:
         :class:`DiscoveredFile` records preserves that gate decision and avoids
         reopening every source merely to recompute an identical SHA-256.
         """
-        reporter = on_progress or noop_progress
+        reporter = weighted_progress(
+            on_progress or noop_progress,
+            stages=ANALYZE_STAGE_ORDER,
+        )
         errors = list(gate_errors or [])
         if self._runtime_llm is not None:
             self._runtime_llm.start_run()

@@ -93,4 +93,6 @@ class TestValidateCommand:
             "copyright",
             "injection",
             "budget",
+            "claim-safety",
+            "runtime-scaffolding",
         }

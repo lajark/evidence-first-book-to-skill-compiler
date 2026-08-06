@@ -83,7 +83,7 @@ class LLMRuntimeConfig:
     api_key: str | None = field(default=None, repr=False, compare=False)
     allow_fallback: bool = False
     temperature: float = 0.2
-    prompt_version: str = "analysis-v6"
+    prompt_version: str = "analysis-v13"
     response_schema_version: str = "analysis-response-v2"
     locale: Locale = "zh-CN"
     max_retries: int = 2
@@ -91,6 +91,7 @@ class LLMRuntimeConfig:
     max_concurrent_requests: int = 2
     requests_per_minute: int = 15
     request_timeout_seconds: float = 30.0
+    streaming: bool = False
     # Profile/routing provenance. ``profile_id`` identifies the channel a
     # run was routed to (None for the legacy single-provider path); the
     # routing strategy version namespaces the content cache so multi-channel
@@ -145,6 +146,11 @@ class LLMInvocation(BaseModel):
     # Channel that served this invocation (None for the single-provider path).
     # Redacted identifier only; never a credential or endpoint secret.
     profile_id: str | None = None
+    streaming: bool = False
+    stream_fallback: bool = False
+    first_token_latency_seconds: float | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    output_tokens_per_second: float | None = Field(default=None, ge=0)
 
 
 class AnalysisRunManifest(BaseModel):
@@ -208,6 +214,7 @@ class RuntimeLLMAdapter:
                 temperature=config.temperature,
                 request_timeout_seconds=config.request_timeout_seconds,
                 locale=config.locale,
+                streaming=config.streaming,
             )
 
     @property
@@ -647,6 +654,7 @@ class RuntimeLLMAdapter:
             "prompt": self._config.prompt_version,
             "schema": self._config.response_schema_version,
             "temperature": self._config.temperature,
+            "streaming": self._config.streaming,
             "profile_id": self._config.profile_id,
             "routing_strategy": self._config.routing_strategy_version,
             "locale": self._config.locale,
@@ -673,6 +681,7 @@ class RuntimeLLMAdapter:
             "prompt": self._config.prompt_version,
             "schema": self._config.response_schema_version,
             "temperature": self._config.temperature,
+            "streaming": self._config.streaming,
             "profile_id": self._config.profile_id,
             "routing_strategy": self._config.routing_strategy_version,
             "locale": self._config.locale,
@@ -916,6 +925,9 @@ class RuntimeLLMAdapter:
             if response is not None
             else None
         )
+        telemetry = getattr(self._provider, "last_chat_telemetry", None)
+        if not isinstance(telemetry, dict):
+            telemetry = {}
         with self._invocation_lock:
             self._invocations.append(
                 LLMInvocation(
@@ -940,6 +952,15 @@ class RuntimeLLMAdapter:
                         else None
                     ),
                     profile_id=self._config.profile_id,
+                    streaming=bool(telemetry.get("streaming", False)),
+                    stream_fallback=bool(telemetry.get("stream_fallback", False)),
+                    first_token_latency_seconds=_metric_float(
+                        telemetry.get("first_token_latency_seconds")
+                    ),
+                    output_tokens=_metric_int(telemetry.get("output_tokens")),
+                    output_tokens_per_second=_metric_float(
+                        telemetry.get("output_tokens_per_second")
+                    ),
                 )
             )
 
@@ -950,7 +971,16 @@ class RuntimeLLMAdapter:
             "max_concurrent_requests": self._config.max_concurrent_requests,
             "requests_per_minute": self._config.requests_per_minute,
             "request_timeout_seconds": self._config.request_timeout_seconds,
+            "streaming": self._config.streaming,
         }
+
+
+def _metric_float(value: object) -> float | None:
+    return value if isinstance(value, (int, float)) and value >= 0 else None
+
+
+def _metric_int(value: object) -> int | None:
+    return value if isinstance(value, int) and value >= 0 else None
 
 
 def resolve_runtime_config(
@@ -993,6 +1023,17 @@ def resolve_runtime_config(
             joined = "/".join(keys)
             raise ValueError(f"{joined} must be numeric") from exc
 
+    def parse_bool(keys: tuple[str, ...], default: bool = False) -> bool:
+        value = pick(None, keys)
+        if value is None:
+            return default
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"{'/'.join(keys)} must be boolean")
+
     resolved = (pick(kind, ("BOOK2SKILL_LLM",), "mock") or "mock").lower()
     resolved_locale = resolve_locale(locale, environment=shell, env_file=file_values)
     if resolved == "mock":
@@ -1022,6 +1063,7 @@ def resolve_runtime_config(
                 ("BOOK2SKILL_LLM_REQUEST_TIMEOUT_SECONDS",), 30.0, float
             )
         ),
+        streaming=parse_bool(("BOOK2SKILL_LLM_STREAMING",)),
     )
 
 

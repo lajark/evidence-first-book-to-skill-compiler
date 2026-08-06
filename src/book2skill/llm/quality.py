@@ -109,7 +109,11 @@ class QualityGate:
                     QualityFlag(unit_id=unit.unit_id, reason=reason, detail=detail)
                 )
         if benchmark_slots:
-            coverage = compute_slot_coverage(bundle.candidate_units, benchmark_slots)
+            coverage = compute_slot_coverage(
+                bundle.candidate_units,
+                benchmark_slots,
+                structure=bundle.structure,
+            )
             min_count = {s.slot_id: s.min_count for s in benchmark_slots}
             for slot_id in missing_slots(coverage, benchmark_slots):
                 flags.append(

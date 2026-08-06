@@ -37,6 +37,42 @@ from book2skill.storage.file_storage import atomic_write
 #: Default budget for the main SKILL.md (PRD FR-04: 2,500–5,000 tokens).
 _DEFAULT_BUDGET = TokenBudget()
 
+# The runtime table is useful for time-boxed execution methods (for example,
+# Pomodoro), but it is harmful when copied into habit, strategy, or reference
+# skills. Keep the decision deterministic and content-based so it works for
+# arbitrary skill names and does not require a new IR/schema field.
+_RUNTIME_SCAFFOLDING_SIGNALS: tuple[str, ...] = (
+    "pomodoro",
+    "番茄钟",
+    "番茄工作法",
+    "estimate feedback",
+    "estimate-versus-actual",
+    "估算反馈",
+    "预估",
+    "实际时长",
+    "偏差",
+    "interruption",
+    "中断",
+    "short break",
+    "long break",
+    "短休息",
+    "长休息",
+    "timebox",
+    "time box",
+    "时间盒",
+)
+_HABIT_SCAFFOLDING_SIGNALS: tuple[str, ...] = (
+    "habit",
+    "micro-habit",
+    "microhabit",
+    "习惯",
+    "微习惯",
+    "cue/trigger",
+    "线索",
+    "奖励",
+    "reward",
+)
+
 class SkillWriter:
     """Write a :class:`SkillIR` to a standard Skill directory.
 
@@ -187,6 +223,12 @@ class SkillWriter:
             self._render_examples(ir.examples),
         )
 
+        runtime_scaffolding = ""
+        template_name = self._runtime_scaffolding_template(ir)
+        if "<!-- runtime-scaffolding -->" in content and template_name:
+            runtime_scaffolding = self._read_runtime_template(template_name).rstrip()
+        content = content.replace("<!-- runtime-scaffolding -->", runtime_scaffolding)
+
         # Append reference routing to the Evidence section when present.
         if ir.references:
             ref_line = (
@@ -272,6 +314,41 @@ class SkillWriter:
         if self._templates_dir is not None:
             return (self._templates_dir / name).read_text(encoding="utf-8")
         return template_file(name).read_text(encoding="utf-8")
+
+    def _read_runtime_template(self, name: str) -> str:
+        """Load the runtime fragment with compatibility for old overrides."""
+        if self._templates_dir is not None:
+            override = self._templates_dir / name
+            if override.is_file():
+                return override.read_text(encoding="utf-8")
+        return template_file(name).read_text(encoding="utf-8")
+
+    @classmethod
+    def _runtime_scaffolding_template(cls, ir: SkillIR) -> str | None:
+        """Select a domain-specific operator scaffold, if one is applicable."""
+        corpus = cls._ir_text(ir)
+        if any(signal.casefold() in corpus for signal in _RUNTIME_SCAFFOLDING_SIGNALS):
+            return "runtime-scaffolding.md"
+        if any(signal.casefold() in corpus for signal in _HABIT_SCAFFOLDING_SIGNALS):
+            return "habit-runtime-scaffolding.md"
+        return None
+
+    @staticmethod
+    def _ir_text(ir: SkillIR) -> str:
+        """Return searchable IR text without exposing source content elsewhere."""
+        parts: list[str] = [
+            ir.name,
+            ir.description,
+            *ir.usage.use_when,
+            *ir.usage.do_not_use_when,
+            *(step.step for step in ir.workflow),
+            *(step.description or "" for step in ir.workflow),
+            *ir.required_inputs,
+            *ir.outputs,
+            *ir.conditions,
+            *ir.exceptions,
+        ]
+        return "\n".join(parts).casefold()
 
     @staticmethod
     def _render_list(

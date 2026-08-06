@@ -35,6 +35,10 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from scripts.acceptance_metrics import analyze_bundle_metrics  # noqa: E402
 from scripts.benchmark_analysis import CountingGate, CountingRawStorage  # noqa: E402
+from scripts.benchmark_evaluation import (  # noqa: E402
+    attach_evaluation,
+    load_evaluations,
+)
 
 from book2skill.application.analyze import AnalyzeUseCase  # noqa: E402
 from book2skill.config import load_env_file  # noqa: E402
@@ -395,7 +399,11 @@ def run_strategy(
 
     bundle_json = bundle.model_dump(mode="json")
     quality_metrics = analyze_bundle_metrics(bundle_json)
-    coverage = compute_slot_coverage(bundle.candidate_units, spec.slots)
+    coverage = compute_slot_coverage(
+        bundle.candidate_units,
+        spec.slots,
+        structure=bundle.structure,
+    )
     gaps = missing_slots(coverage, spec.slots)
 
     measurement: dict[str, Any] = {
@@ -561,6 +569,14 @@ def main(argv: list[str] | None = None) -> int:
             "scan-only 'sunzi' runs only when named explicitly)"
         ),
     )
+    parser.add_argument(
+        "--evaluations",
+        type=Path,
+        help=(
+            "validated evaluator JSON file or directory; when supplied, "
+            "backfill benchmark_score for matching book/strategy records"
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -570,6 +586,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("pass --mock (offline) or --profiles <yaml> (real cloud)")
     profile_set = _mock_profile_set() if args.mock else load_profile_set(args.profiles)
     env_file = load_env_file()
+    evaluations = load_evaluations(args.evaluations) if args.evaluations else {}
     if args.skip_missing:
         profile_set = profile_set.active(env_file=env_file)
 
@@ -594,6 +611,9 @@ def main(argv: list[str] | None = None) -> int:
                     profile_set,
                     data_home=data_home,
                     env_file=env_file,
+                )
+                measurement = attach_evaluation(
+                    measurement, evaluations.get((spec.book_id, strategy))
                 )
                 measurements.append(measurement)
                 per_strategy[strategy].append(measurement)

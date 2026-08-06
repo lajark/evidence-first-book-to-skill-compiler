@@ -651,6 +651,8 @@ class TestPublish:
             "copyright",
             "injection",
             "budget",
+            "claim-safety",
+            "runtime-scaffolding",
         }
         source_check = next(
             check

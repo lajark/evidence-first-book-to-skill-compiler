@@ -4,7 +4,9 @@ Each evaluation rubric in ``Skill提炼质量评估基准/`` schedules a set of 
 (``A1`` … ``F5``) plus scenario cases. OPT-P1-11 turns those items into
 machine-readable :class:`BenchmarkSlot` objects: a slot is covered when at
 least ``min_count`` candidate units of an allowed ``kind`` contain any of the
-slot's ``keywords`` in their content and carry at least one source ref.
+slot's ``keywords`` in their content and carry at least one source ref. A
+slot may additionally declare ``structure_keywords`` when headings themselves
+are valid evidence (for example, a classical book's chapter list).
 
 This is deliberately a *heuristic* proxy, not a substitute for the rubric's
 100-point evaluation. It only answers "does the Analyze output contain any
@@ -35,6 +37,7 @@ class BenchmarkSlot:
     kinds: list[str]
     keywords: list[str]
     min_count: int = 1
+    structure_keywords: list[str] | None = None
 
 
 def load_benchmark_slots(path: Path) -> list[BenchmarkSlot]:
@@ -90,24 +93,42 @@ def _parse_slot(entry: dict[str, Any]) -> BenchmarkSlot:
         raise ValueError(
             f"benchmark slot {slot_id!r} 'min_count' must be a positive integer"
         )
+    structure_keywords = entry.get("structure_keywords")
+    if structure_keywords is not None and (
+        not isinstance(structure_keywords, list)
+        or not structure_keywords
+        or not all(isinstance(k, str) and k for k in structure_keywords)
+    ):
+        raise ValueError(
+            f"benchmark slot {slot_id!r} 'structure_keywords' must be a "
+            "non-empty list when provided"
+        )
     return BenchmarkSlot(
         slot_id=slot_id,
         rubric_item_id=rubric_item_id,
         kinds=list(kinds),
         keywords=list(keywords),
         min_count=min_count,
+        structure_keywords=(
+            list(structure_keywords) if structure_keywords is not None else None
+        ),
     )
 
 
 def compute_slot_coverage(
     candidates: list[CandidateUnit],
     slots: list[BenchmarkSlot],
+    structure: list[Any] | None = None,
 ) -> dict[str, int]:
-    """Return ``{slot_id: matched_candidate_count}`` for ``slots``.
+    """Return ``{slot_id: matched_evidence_count}`` for ``slots``.
 
     A candidate covers a slot when its ``kind`` is allowed, its content
     contains at least one keyword (case-insensitive), and it carries at least
-    one source ref. Each candidate counts at most once per slot.
+    one source ref. Each candidate counts at most once per slot. When a slot
+    declares ``structure_keywords``, matching source headings/text previews
+    are also counted; the larger of candidate and structure evidence is
+    returned. Structure evidence is opt-in per slot so ordinary rubric items
+    retain their candidate-only semantics.
     """
     coverage: dict[str, int] = {slot.slot_id: 0 for slot in slots}
     for slot in slots:
@@ -121,6 +142,23 @@ def compute_slot_coverage(
             lowered = candidate.content.lower()
             if any(kw in lowered for kw in keywords):
                 coverage[slot.slot_id] += 1
+        if slot.structure_keywords and structure:
+            structure_keywords = [kw.lower() for kw in slot.structure_keywords]
+            structure_count = 0
+            for entry in structure:
+                heading = getattr(entry, "heading", None)
+                preview = getattr(entry, "text_preview", None)
+                if isinstance(entry, dict):
+                    heading = entry.get("heading")
+                    preview = entry.get("text_preview")
+                searchable = " ".join(
+                    value.lower()
+                    for value in (heading, preview)
+                    if isinstance(value, str) and value.strip()
+                )
+                if searchable and any(kw in searchable for kw in structure_keywords):
+                    structure_count += 1
+            coverage[slot.slot_id] = max(coverage[slot.slot_id], structure_count)
     return coverage
 
 

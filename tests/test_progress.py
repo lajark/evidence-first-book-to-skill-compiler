@@ -6,12 +6,14 @@ from pathlib import Path
 
 from book2skill.application.analyze import AnalyzeUseCase
 from book2skill.application.progress import (
+    BUILD_STAGE_ORDER,
     STAGE_CANDIDATES,
     STAGE_COMPILE,
     STAGE_EXTRACT,
     STAGE_SKILLS,
     STAGE_STRUCTURE,
     ProgressEvent,
+    WeightedProgressReporter,
     noop_progress,
 )
 
@@ -228,6 +230,54 @@ class TestAnalyzeProgress:
 
     def test_noop_progress_is_a_noop(self) -> None:
         noop_progress(STAGE_EXTRACT, 1, 1, "x")  # must not raise
+
+    def test_weighted_progress_is_monotonic_and_reaches_pipeline_completion(
+        self,
+    ) -> None:
+        downstream = _EventCollector()
+        reporter = WeightedProgressReporter(downstream, stages=BUILD_STAGE_ORDER)
+
+        reporter.on_progress_event(
+            ProgressEvent(STAGE_EXTRACT, 1, 1, status="completed")
+        )
+        reporter.on_progress_event(
+            ProgressEvent(
+                STAGE_STRUCTURE,
+                0,
+                2,
+                status="started",
+                work_completed=0,
+                work_total=1_000,
+            )
+        )
+        reporter.on_progress_event(
+            ProgressEvent(
+                STAGE_STRUCTURE,
+                2,
+                2,
+                status="completed",
+                work_completed=1_000,
+                work_total=1_000,
+            )
+        )
+        # Candidates and synthesis are absent on some valid short/legacy
+        # paths; entering skills must account for those skipped stages.
+        reporter.on_progress_event(ProgressEvent(STAGE_SKILLS, 0, 1))
+        reporter.on_progress_event(
+            ProgressEvent(STAGE_SKILLS, 1, 1, status="completed")
+        )
+        reporter.on_progress_event(
+            ProgressEvent(STAGE_COMPILE, 1, 1, status="completed")
+        )
+
+        overall = [
+            event.overall_completed
+            for event in downstream.events
+            if event.overall_completed is not None
+        ]
+        assert overall == sorted(overall)
+        assert downstream.events[-1].overall_completed == 100.0
+        assert all(event.overall_total == 100.0 for event in downstream.events)
 
 
 class TestBuildProgress:

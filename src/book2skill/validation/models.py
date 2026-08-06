@@ -75,8 +75,9 @@ class CheckResult:
     """Outcome of a single check, serialisable to the report's ``checks[]``.
 
     Attributes:
-        check_id: Stable identifier: ``frontmatter`` | ``source-coverage`` |
-            ``copyright`` | ``injection`` | ``budget``.
+        check_id: Stable identifier such as ``frontmatter`` |
+            ``source-coverage`` | ``copyright`` | ``injection`` | ``budget`` |
+            ``claim-safety``.
         status: Worst severity among findings, or :data:`CheckStatus.NOT_RUN`
             when the check was skipped.
         message: One-line summary.

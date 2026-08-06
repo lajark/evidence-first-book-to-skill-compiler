@@ -26,6 +26,8 @@ description: <What this skill does, when to use it, and key boundary.>
 ## Output contract
 - <output>
 
+<!-- runtime-scaffolding -->
+
 ## Examples
 - <example>
 

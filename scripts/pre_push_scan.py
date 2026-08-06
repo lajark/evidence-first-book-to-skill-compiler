@@ -15,6 +15,7 @@ This script is read-only: it does not modify, delete, or stage any file.
 from __future__ import annotations
 
 import fnmatch
+import re
 import sys
 from pathlib import Path
 
@@ -47,17 +48,38 @@ SENSITIVE_PATTERNS = [
     "workspace/acceptance/**",
 ]
 
-# Patterns that look sensitive in file *content* (very small, conservative set).
-CONTENT_PATTERNS = [
-    "-----BEGIN PRIVATE KEY-----",
-    "-----BEGIN OPENSSH PRIVATE KEY-----",
-    "sk-",  # OpenAI-style API keys (prefix only; do not log full keys)
-    "ghp_",  # GitHub PAT prefix
-    "gho_",  # GitHub OAuth token prefix
+# Safe, intentionally tracked templates.  ``.env.*`` remains blocked for all
+# other files so a real local environment file cannot enter the repository.
+ALLOWED_TEMPLATE_PATHS = {".env.example"}
+
+# Patterns that look sensitive in file content.  Match complete, sufficiently
+# long token-like values rather than prefixes in documentation and tests.
+CONTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("private-key", re.compile(r"-----BEGIN (?:OPENSSH )?PRIVATE KEY-----")),
+    (
+        "openai-key",
+        re.compile(
+            r"\bsk-(?=[A-Za-z0-9_-]{20,}\b)"
+            r"(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]+\b"
+        ),
+    ),
+    ("github-pat", re.compile(r"\bghp_[A-Za-z0-9]{30,}\b")),
+    ("github-oauth", re.compile(r"\bgho_[A-Za-z0-9]{30,}\b")),
 ]
+_SYNTHETIC_TOKEN_MARKERS = (
+    "example",
+    "dummy",
+    "fake",
+    "local",
+    "placeholder",
+    "test",
+    "your-key",
+)
 
 
 def _match_any(path_str: str, patterns: list[str]) -> str | None:
+    if path_str.replace("\\", "/") in ALLOWED_TEMPLATE_PATHS:
+        return None
     for pat in patterns:
         if fnmatch.fnmatch(path_str, pat) or fnmatch.fnmatch(
             path_str, "**/" + pat
@@ -103,6 +125,10 @@ def _scan_content(files: list[str]) -> list[tuple[str, str]]:
     """Scan file contents for credential markers. Text files only."""
     hits: list[tuple[str, str]] = []
     for f in files:
+        # This scanner necessarily contains its own marker patterns; scanning
+        # it would make every clean repository fail closed on its own code.
+        if f.replace("\\", "/") == "scripts/pre_push_scan.py":
+            continue
         path = _REPO_ROOT / f
         if not path.is_file():
             continue
@@ -115,9 +141,13 @@ def _scan_content(files: list[str]) -> list[tuple[str, str]]:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        for marker in CONTENT_PATTERNS:
-            if marker in text:
-                hits.append((f, f"content:{marker}"))
+        for label, pattern in CONTENT_PATTERNS:
+            match = pattern.search(text)
+            if match and not any(
+                marker in match.group(0).casefold()
+                for marker in _SYNTHETIC_TOKEN_MARKERS
+            ):
+                hits.append((f, f"content:{label}"))
                 break
     return hits
 

@@ -54,6 +54,22 @@ class _FailingProvider:
         raise LLMRuntimeError("network unavailable")
 
 
+class _TelemetryProvider:
+    last_chat_telemetry = {
+        "streaming": True,
+        "stream_fallback": False,
+        "first_token_latency_seconds": 0.25,
+        "output_tokens": 12,
+        "output_tokens_per_second": 48.0,
+    }
+
+    def extract_candidates(
+        self, source_id: str, blocks: list[TextBlock]
+    ) -> list[dict[str, object]]:
+        del source_id, blocks
+        return []
+
+
 class _BlockingProvider:
     def __init__(self) -> None:
         self.active = 0
@@ -152,6 +168,24 @@ def test_real_runtime_requires_credentials() -> None:
         LLMRuntimeConfig(provider="openai", model="demo")
 
 
+def test_runtime_manifest_records_streaming_telemetry() -> None:
+    adapter = RuntimeLLMAdapter(
+        LLMRuntimeConfig(
+            provider="openai", model="demo", api_key="test", streaming=True
+        )
+    )
+    adapter._provider = _TelemetryProvider()  # noqa: SLF001 - telemetry seam
+
+    adapter.extract_candidates("source", _blocks())
+
+    invocation = adapter.manifest.invocations[-1]
+    assert invocation.streaming is True
+    assert invocation.stream_fallback is False
+    assert invocation.first_token_latency_seconds == 0.25
+    assert invocation.output_tokens == 12
+    assert invocation.output_tokens_per_second == 48.0
+
+
 def test_default_timing_history_uses_platform_local_cache() -> None:
     path = default_timing_history_path(
         {"LOCALAPPDATA": r"C:\Users\demo\AppData\Local"}
@@ -221,12 +255,14 @@ def test_resolver_reads_llm_scheduler_environment_values() -> None:
             "BOOK2SKILL_LLM_MAX_CONCURRENT_REQUESTS": "2",
             "BOOK2SKILL_LLM_REQUESTS_PER_MINUTE": "120",
             "BOOK2SKILL_LLM_REQUEST_TIMEOUT_SECONDS": "12.5",
+            "BOOK2SKILL_LLM_STREAMING": "true",
         },
     )
 
     assert config.max_concurrent_requests == 2
     assert config.requests_per_minute == 120
     assert config.request_timeout_seconds == 12.5
+    assert config.streaming is True
 
 
 def test_chunk_runtime_retries_then_opens_circuit() -> None:

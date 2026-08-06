@@ -33,6 +33,7 @@ cp .env.example .env    # 从模板复制（.env 已被 .gitignore 排除，不�
 | `BOOK2SKILL_LLM_MAX_CONCURRENT_REQUESTS` | 同时在途请求上限；云端默认 `2` | `2` | `1`–`2` |
 | `BOOK2SKILL_LLM_REQUESTS_PER_MINUTE` | 请求启动速率；云端默认 `15` | `15` | `30` |
 | `BOOK2SKILL_LLM_REQUEST_TIMEOUT_SECONDS` | 单请求超时秒数 | `180` | `60` |
+| `BOOK2SKILL_LLM_STREAMING` | 单 provider 是否请求流式响应；`true`/`false` | `true` | `true` |
 
 > 旧版 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` 仍生效，优先级低于 `LLM_*`。
 
@@ -66,6 +67,14 @@ book2skill batch ./docs/ --json
 对于 EPUB，Book2Skill 保留 spine 章节边界，以约 1,200 Token 的限长证据卡 →
 章节综合 → 全书综合处理。综合阶段只传递前一层的结构化卡片，不会重复上传整章原文；
 每个 Map/Reduce 请求均按内容寻址缓存，重跑会复用已完成的结果。
+
+### 可选流式响应（OPT-P2-05）
+
+设置 `BOOK2SKILL_LLM_STREAMING=true`，或在 profile 中为单个通道设置
+`streaming: true`。流式响应会在审计中记录首 Token 延迟、输出 Token 数和
+Token/s；只有完整拼接并通过结构化 JSON 校验后，请求才算完成。若兼容端点明确
+拒绝 `stream=true`（常见为 400/404/405/422），该请求自动重试一次非流式模式；
+其他网络错误或不完整 JSON 仍 fail-closed，不会以部分输出伪造完成。
 
 ---
 
@@ -267,6 +276,7 @@ profiles:
     max_concurrent_requests: 2
     requests_per_minute: 15
     request_timeout_seconds: 180
+    streaming: false
     cost_per_million_input_tokens: 0.14
     data_send_policy: original_text_allowed
     allowed_material_categories: [licensed_book, public_doc]
@@ -313,7 +323,7 @@ profiles:
 - Critic 匿名：只看到 `EvidenceCard`（脱敏模型 id，无 prompt/端点/第一轮模型身份）；Arbiter 基于来源证据裁决，不用多数票；每个 `ReviewPatch` 的 `source_refs` 必须是候选原有来源的子集（来源回放），未知引用被拒。
 - `--quality-mode maximum` 实验模式默认关闭：必须显式 `--quality-authorization` 与 `--quality-budget-calls`/`--quality-budget-cost` 硬预算，否则拒绝启动；触及预算即停止新调用并报告 `budget_exceeded`，不静默丢弃。
 - 仅 Analyze 单命令启用；Build/Update/Batch 不跑质量复核（人工审核在编译前）。
-- `QualityGate.detect` 可带 `benchmark_slots`（benchmark_abc/slots/*.yaml）触发 `benchmark_gap` 标记：按 kind + 关键词 + 来源覆盖检测评估基准槽位缺失，本地无 LLM 调用。
+- `QualityGate.detect` 可带 `benchmark_slots`（benchmark_abc/slots/*.yaml）触发 `benchmark_gap` 标记：默认按 kind + 关键词 + 来源覆盖检测；槽位声明 `structure_keywords` 时，同时纳入章节标题/结构预览证据，本地无 LLM 调用。
 
 ---
 
@@ -327,7 +337,7 @@ profiles:
 python scripts/benchmark_abc.py --mock --output-dir workspace/benchmarks/abc-offline/
 ```
 
-输出 `single.md` / `balanced.md` / `quality.md` / `summary.md`（脱敏，无 key/端点/prompt/正文）。`benchmark_score` 为 `null`，需人工或独立评测师按 `Skill提炼质量评估基准/` 打分后回填。
+输出 `single.md` / `balanced.md` / `quality.md` / `summary.md`（脱敏，无 key/端点/prompt/正文）。`benchmark_score` 默认保持 `null`，不会由槽位覆盖启发式自动推断。人工或独立评测师按 `Skill提炼质量评估基准/` 输出带 `book_id`、`strategy`、`benchmark_id`、`evaluator`、`evaluation_date`、`confidence`、`final_score` 的 JSON 后，可用 `--evaluations <file-or-dir>` 显式回填匹配的报告记录；不匹配或重复记录会 fail-closed。
 
 ### 阶段二：真实多云（需多 provider profile + 数据发送授权）
 

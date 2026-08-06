@@ -87,8 +87,49 @@ class TestWriteDirectory:
         assert "## Conditions" in content
         assert "## Exceptions and escalation" in content
         assert "## Output contract" in content
+        assert "<!-- runtime-scaffolding -->" not in content
+        assert "## Runtime execution scaffolding" not in content
         assert "## Examples" in content
         assert "## Evidence and limitations" in content
+
+    def test_runtime_scaffolding_is_rendered_for_time_boxed_methods(
+        self, writer: SkillWriter
+    ) -> None:
+        ir = _ir(
+            name="pomodoro-skill",
+            description="Run a Pomodoro session and record estimate deviation.",
+        )
+        writer.write(ir)
+        content = (writer._output_dir / "SKILL.md").read_text(encoding="utf-8")
+        assert "## Runtime execution scaffolding" in content
+        assert "Available time（可用时间）" in content
+        assert "Deviation/cause（偏差/原因）" in content
+
+    def test_runtime_scaffolding_does_not_contaminate_other_domains(
+        self, writer: SkillWriter
+    ) -> None:
+        ir = _ir(
+            name="sunzi-strategy",
+            description="Compare objectives, intelligence, constraints, and options.",
+        )
+        writer.write(ir)
+        content = (writer._output_dir / "SKILL.md").read_text(encoding="utf-8")
+        assert "## Runtime execution scaffolding" not in content
+        assert "Estimate feedback record" not in content
+
+    def test_habit_scaffolding_uses_habit_artifacts(
+        self, writer: SkillWriter
+    ) -> None:
+        ir = _ir(
+            name="micro-habits",
+            description="Build a micro-habit with a cue, reward, and daily check.",
+        )
+        writer.write(ir)
+        content = (writer._output_dir / "SKILL.md").read_text(encoding="utf-8")
+        assert "## Habit execution scaffolding" in content
+        assert "Micro-habit plan" in content
+        assert "Daily check record" in content
+        assert "Estimate feedback record" not in content
 
     def test_skill_md_renders_domain_contract_and_case_example(
         self, writer: SkillWriter

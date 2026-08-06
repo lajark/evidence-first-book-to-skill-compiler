@@ -108,6 +108,27 @@ def test_progress_uses_token_weighted_work_and_historical_eta() -> None:
         assert task.fields["eta"] == "预计剩余：8s–16s"
 
 
+def test_progress_renders_overall_pipeline_task() -> None:
+    from book2skill.application.progress import ProgressEvent
+    from book2skill.cli import _ProgressCtx
+
+    context = _ProgressCtx("Working...")
+    with context as report:
+        on_event = report.on_progress_event  # type: ignore[attr-defined]
+        on_event(
+            ProgressEvent(
+                "structure",
+                1,
+                4,
+                overall_completed=42.0,
+                overall_total=100.0,
+            )
+        )
+        overall = context._progress.tasks[1]  # noqa: SLF001 - renderer seam
+        assert overall.completed == 42.0
+        assert overall.total == 100.0
+
+
 def test_hello() -> None:
     result = runner.invoke(app, ["hello"])
     assert result.exit_code == 0

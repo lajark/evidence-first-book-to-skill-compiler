@@ -57,9 +57,11 @@ from book2skill.application.candidates import candidate_to_unit
 from book2skill.application.gate import GateError
 from book2skill.application.models import AnalysisBundle
 from book2skill.application.progress import (
+    BUILD_STAGE_ORDER,
     STAGE_COMPILE,
     ProgressReporter,
     noop_progress,
+    weighted_progress,
 )
 from book2skill.application.publisher import SkillMeta
 from book2skill.compiler import IRBuilder, SkillIR, SkillSpec, SkillWriter
@@ -179,7 +181,10 @@ class BuildUseCase:
         Returns:
             A :class:`BuildResult` with ``skill_dir`` set on success.
         """
-        reporter = on_progress or noop_progress
+        reporter = weighted_progress(
+            on_progress or noop_progress,
+            stages=BUILD_STAGE_ORDER,
+        )
         analyze_result = self._analyze.execute(
             inputs,
             collection_id=collection_id,
@@ -244,7 +249,10 @@ class BuildUseCase:
                 :data:`ErrorCode.BUILD_SOURCE_TRACE_INVALID` when its source
                 references cannot be verified against matching Raw records.
         """
-        reporter = on_progress or noop_progress
+        reporter = weighted_progress(
+            on_progress or noop_progress,
+            stages=(STAGE_COMPILE,),
+        )
         if not bundle_path.exists():
             raise DomainError(
                 code=ErrorCode.BUILD_INPUT_INVALID,
