@@ -33,6 +33,8 @@ jobs:
         run: python -m mypy src
       - name: Check provenance
         run: python scripts/check_provenance.py
+      - name: Distribution policy scan
+        run: python scripts/pre_push_scan.py --untracked
 
   optional-extra:
     name: optional ${{ matrix.extra }} (Python 3.11)

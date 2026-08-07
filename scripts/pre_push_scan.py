@@ -46,6 +46,36 @@ SENSITIVE_PATTERNS = [
     "htmlcov/**",
     "coverage.xml",
     "workspace/acceptance/**",
+    # Process directory (also covered by INTERNAL_PATTERNS, kept here so either
+    # phase flags it)
+    ".workspace/**",
+]
+
+# Process-internal files that carry no external delivery value and must not be
+# pushed to public or private remotes. See DISTRIBUTION_POLICY.md §1.2.
+INTERNAL_PATTERNS = [
+    "Skill提炼质量评估基准/**",
+    "benchmark_abc/**",
+    "scripts/benchmark_abc.py",
+    "scripts/benchmark_analysis.py",
+    "scripts/benchmark_cli_startup.py",
+    "scripts/benchmark_evaluation.py",
+    "TODO.md",
+    "/TODO.md",
+    "PRD.md",
+    "TASKS.md",
+    "IMPLEMENTATION_PLAN.md",
+    "ACCEPTANCE_TEST_PLAN.md",
+    "GITEE_PRIVATE_REPO.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CLAUDE.local.*",
+    "PACKAGE_MANIFEST.md",
+    ".workspace/**",
+    "docs/INTEGRATION_REVIEW.md",
+    "docs/M6_ACCEPTANCE_REPORT.md",
+    "docs/P1_ACCEPTANCE_BENCHMARK_BASELINE.md",
+    "docs/P2_PLATFORM_BASELINE.md",
 ]
 
 # Safe, intentionally tracked templates.  ``.env.*`` remains blocked for all
@@ -109,15 +139,22 @@ def _git_list_files(extra_args: list[str]) -> list[str]:
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
-def _scan_paths(files: list[str]) -> list[tuple[str, str]]:
-    """Return [(path, matched_pattern), ...] for sensitive matches."""
-    hits: list[tuple[str, str]] = []
+def _scan_paths(files: list[str]) -> dict[str, list[tuple[str, str]]]:
+    """Return {category: [(path, matched_pattern), ...]} for path matches.
+
+    Categories: ``sensitive`` (must never be pushed) and ``process-internal``
+    (no external delivery value; should live under .workspace/ or be ignored).
+    """
+    hits: dict[str, list[tuple[str, str]]] = {"sensitive": [], "process-internal": []}
     for f in files:
         # Normalize to forward slashes for fnmatch.
         norm = f.replace("\\", "/")
-        pat = _match_any(norm, SENSITIVE_PATTERNS)
-        if pat:
-            hits.append((f, pat))
+        s_pat = _match_any(norm, SENSITIVE_PATTERNS)
+        if s_pat:
+            hits["sensitive"].append((f, s_pat))
+        i_pat = _match_any(norm, INTERNAL_PATTERNS)
+        if i_pat:
+            hits["process-internal"].append((f, i_pat))
     return hits
 
 
@@ -205,22 +242,29 @@ def main(argv: list[str]) -> int:
     path_hits = _scan_paths(files)
     content_hits = _scan_content(files)
 
-    if not path_hits and not content_hits:
+    sensitive = path_hits.get("sensitive", [])
+    internal = path_hits.get("process-internal", [])
+
+    if not sensitive and not internal and not content_hits:
         print(f"OK: scanned {len(files)} file(s); no sensitive matches.")
         return 0
 
-    print(f"FAIL: sensitive data detected in {len(files)} scanned file(s):",
+    print(f"FAIL: distribution policy violations in {len(files)} scanned file(s):",
           file=sys.stderr)
-    for path, pat in path_hits:
-        print(f"  PATH  {path}  (matched: {pat})", file=sys.stderr)
+    for path, pat in sensitive:
+        print(f"  SENSITIVE  {path}  (matched: {pat})", file=sys.stderr)
+    for path, pat in internal:
+        print(f"  PROCESS-INTERNAL  {path}  (matched: {pat})", file=sys.stderr)
     for path, pat in content_hits:
         print(f"  CONTENT  {path}  (matched: {pat})", file=sys.stderr)
     print(
         "\nRemediation:\n"
-        "  1. If the file should be ignored: add it to .gitignore.\n"
-        "  2. If already tracked: `git rm --cached <path>` (keeps the local file).\n"
-        "  3. If a secret leaked into history: rotate it immediately, then use\n"
-        "     `git filter-repo` to rewrite history before pushing.",
+        "  1. Sensitive (secret/credential/copyright): rotate/scrub immediately;\n"
+        "     if tracked, `git rm --cached <path>`; if leaked into history, use\n"
+        "     `git filter-repo` to rewrite before pushing.\n"
+        "  2. Process-internal (no delivery value): move the file under "
+        ".workspace/ or add it to .gitignore; if tracked, `git rm --cached <path>`.\n"
+        "  3. See DISTRIBUTION_POLICY.md for the three-class file matrix.",
         file=sys.stderr,
     )
     return 1
