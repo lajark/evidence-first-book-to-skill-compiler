@@ -74,3 +74,12 @@ trae-project-rules-mirror.md
 
 # User import archives / spec packages
 *.zip
+
+# Process-internal quality evaluation and benchmarks (see DISTRIBUTION_POLICY.md)
+Skill提炼质量评估基准/
+benchmark_abc/
+scripts/benchmark_abc.py
+scripts/benchmark_analysis.py
+scripts/benchmark_cli_startup.py
+scripts/benchmark_evaluation.py
+/项目1_Book2Skill_参考项目与增量优化建议.md

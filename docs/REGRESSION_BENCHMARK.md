@@ -13,7 +13,7 @@
 
 | 类别 | 仓库证据 | 关注点 |
 |---|---|---|
-| 结构清晰短文 | `tests/test_benchmark_abc.py` A 类 | 稳定结构、来源覆盖 |
+| 结构清晰短文 | `tests/test_benchmark_slots.py` A 类 | 稳定结构、来源覆盖 |
 | 流程型方法资料 | B 类与 Build fixtures | 工作流可执行性 |
 | 复杂方法论资料 | C 类、冲突/审核 fixtures | 冲突保留、预算与拆分建议 |
 | 格式困难样本 | extractor 的损坏、加密、扫描、编码测试 | 明确降级与错误码 |
