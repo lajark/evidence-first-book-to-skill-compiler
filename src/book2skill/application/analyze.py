@@ -49,6 +49,10 @@ from book2skill.domain import (
     TextBlock,
     derive_candidate_unit_id,
 )
+from book2skill.extractors.base import (
+    ExtractionContractError,
+    validate_extraction_result,
+)
 from book2skill.extractors.registry import ExtractorRegistry, default_registry
 from book2skill.llm.chunking import ChunkItem, chunk_blocks, estimate_tokens
 from book2skill.llm.ports import LLMAdapter
@@ -292,6 +296,12 @@ class AnalyzeUseCase:
                     original_name=f.original_name,
                     rights_note=rights_note,
                 )
+                validate_extraction_result(
+                    extracted,
+                    source_id=f.source_id,
+                    source_format=f.format,
+                    content_sha256=f.content_sha256,
+                )
             except DomainError as exc:
                 errors.append(
                     GateError(
@@ -299,6 +309,30 @@ class AnalyzeUseCase:
                         code=exc.code,
                         message=exc.message,
                         recovery=exc.recovery,
+                    )
+                )
+                continue
+            except (
+                ExtractionContractError,
+                ValidationError,
+                AttributeError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                detail = (
+                    str(exc)
+                    if isinstance(exc, ExtractionContractError)
+                    else f"{type(exc).__name__}"
+                )
+                errors.append(
+                    GateError(
+                        path=f.path,
+                        code=ErrorCode.EXTRACT_RESULT_INVALID,
+                        message=f"Extractor returned an invalid result: {detail}",
+                        recovery=(
+                            "Use an extractor that preserves source IDs, block "
+                            "locators, hashes and deterministic block IDs."
+                        ),
                     )
                 )
                 continue

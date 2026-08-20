@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from book2skill.domain.errors import DomainError, ErrorCode
 from book2skill.storage import atomic_write
 
 TransactionState = Literal[
@@ -21,6 +22,33 @@ TransactionState = Literal[
     "committed",
     "rollback_required",
 ]
+
+# The update journal is a durable state machine.  Keeping the graph next to
+# the journal writer makes every state mutation (including recovery) pass
+# through the same guard instead of relying on callers to remember the
+# lifecycle ordering.
+TRANSACTION_TRANSITIONS: dict[TransactionState, frozenset[TransactionState]] = {
+    "prepared": frozenset({"prepared", "publishing", "rollback_required"}),
+    "publishing": frozenset(
+        {"publishing", "skill_published", "committed", "rollback_required"}
+    ),
+    "skill_published": frozenset(
+        {"skill_published", "schema_committed", "committed", "rollback_required"}
+    ),
+    "schema_committed": frozenset(
+        {"schema_committed", "committed", "rollback_required"}
+    ),
+    "committed": frozenset({"committed"}),
+    "rollback_required": frozenset({"rollback_required"}),
+}
+
+
+def can_transition(
+    current: TransactionState, target: TransactionState
+) -> bool:
+    """Return whether *target* is a legal next state for *current*."""
+
+    return target in TRANSACTION_TRANSITIONS[current]
 
 
 class UpdateTransaction(BaseModel):
@@ -123,6 +151,24 @@ class UpdateTransactionStore:
         active_pointer_sha256: str | None = None,
         publish_index_sha256: str | None = None,
     ) -> UpdateTransaction:
+        if not can_transition(transaction.state, state):
+            raise DomainError(
+                code=ErrorCode.INVALID_STATE_TRANSITION,
+                input_id=transaction.collection_id,
+                message=(
+                    "Update transaction state transition is not permitted: "
+                    f"{transaction.state} -> {state}."
+                ),
+                recovery=(
+                    "Inspect the transaction journal and resume from its "
+                    "current lifecycle state."
+                ),
+                details={
+                    "transaction_id": transaction.transaction_id,
+                    "from_state": transaction.state,
+                    "to_state": state,
+                },
+            )
         updated = transaction.model_copy(
             update={
                 "state": state,
@@ -184,4 +230,10 @@ class UpdateTransactionStore:
         return records
 
 
-__all__ = ["TransactionState", "UpdateTransaction", "UpdateTransactionStore"]
+__all__ = [
+    "TRANSACTION_TRANSITIONS",
+    "TransactionState",
+    "UpdateTransaction",
+    "UpdateTransactionStore",
+    "can_transition",
+]

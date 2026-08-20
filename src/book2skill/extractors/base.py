@@ -22,6 +22,14 @@ from book2skill.domain import (
 )
 
 
+class ExtractionContractError(ValueError):
+    """Raised when an adapter returns semantically inconsistent extraction data."""
+
+    def __init__(self, issues: list[str]) -> None:
+        self.issues = tuple(issues)
+        super().__init__("; ".join(self.issues))
+
+
 @dataclass(frozen=True, slots=True)
 class ExtractorCapabilities:
     """Declares what an extractor can recover from a source.
@@ -181,6 +189,65 @@ class Extractor(ABC):
         return {}
 
 
+def validate_extraction_result(
+    result: ExtractionResult,
+    *,
+    source_id: str,
+    source_format: SourceFormat,
+    content_sha256: str | None = None,
+) -> None:
+    """Validate the semantic contract shared by every extractor.
+
+    Pydantic validates individual records, but it cannot verify relationships
+    across the manifest, text blocks and source map.  This gate runs before
+    Raw persistence and before any LLM call, so an adapter cannot silently
+    publish stale, mislabelled or untraceable content.
+    """
+    issues: list[str] = []
+    manifest = result.manifest
+    blocks = tuple(result.blocks)
+    entries = tuple(result.entries)
+
+    if manifest.source_id != source_id:
+        issues.append("manifest.source_id does not match the trusted source_id")
+    if manifest.format != source_format:
+        issues.append("manifest.format does not match the detected source format")
+    if content_sha256 is not None and manifest.content_sha256 != content_sha256:
+        issues.append("manifest.content_sha256 does not match the gated file hash")
+    if not blocks:
+        issues.append("extraction returned no text blocks")
+    if len(blocks) != len(entries):
+        issues.append("each extracted block must have one map entry")
+
+    seen_block_ids: set[str] = set()
+    for ordinal, (block, entry) in enumerate(
+        zip(blocks, entries, strict=True), start=1
+    ):
+        if not block.text.strip():
+            issues.append(f"block {ordinal} contains only whitespace")
+        if entry.source_id != source_id:
+            issues.append(f"entry {ordinal} source_id does not match the source")
+        if entry.locator != block.locator:
+            issues.append(f"entry {ordinal} locator does not match its block")
+
+        expected_hash = hashlib.sha256(block.text.encode("utf-8")).hexdigest()
+        if entry.text_sha256 != expected_hash:
+            issues.append(f"entry {ordinal} text_sha256 does not match its block")
+
+        expected_block_id = derive_block_id(source_id, block.locator, ordinal)
+        if entry.block_id != expected_block_id:
+            issues.append(
+                f"entry {ordinal} block_id is not the deterministic "
+                "source-scoped identifier"
+            )
+        if entry.block_id in seen_block_ids:
+            issues.append(f"duplicate block_id: {entry.block_id}")
+        seen_block_ids.add(entry.block_id)
+
+    if issues:
+        raise ExtractionContractError(issues)
+
+
 def _sha256_path(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -189,4 +256,10 @@ def _sha256_path(path: Path) -> str:
     return digest.hexdigest()
 
 
-__all__ = ["ExtractionResult", "Extractor", "ExtractorCapabilities"]
+__all__ = [
+    "ExtractionContractError",
+    "ExtractionResult",
+    "Extractor",
+    "ExtractorCapabilities",
+    "validate_extraction_result",
+]

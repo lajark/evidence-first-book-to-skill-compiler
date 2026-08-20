@@ -31,6 +31,8 @@ profiles:
     roles: [map, section_reduce, book_reduce, synthesis, skill, critic, arbiter]
     max_concurrent_requests: 2
     requests_per_minute: 15
+    # 可选：该通道每 60 秒允许的估算输入 Token 数。
+    # tokens_per_minute: 100000
     request_timeout_seconds: 180
     streaming: false
     max_retries: 2

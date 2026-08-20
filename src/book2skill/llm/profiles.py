@@ -230,6 +230,7 @@ def profile_to_runtime_config(
             locale=profile.locale or locale,
             profile_id=profile.profile_id,
             data_send_policy=profile.data_send_policy,
+            tokens_per_minute=profile.tokens_per_minute,
         )
     api_key = resolve_credentials(profile, env_file=env_file)
     return LLMRuntimeConfig(
@@ -243,6 +244,7 @@ def profile_to_runtime_config(
         circuit_failure_threshold=profile.circuit_failure_threshold,
         max_concurrent_requests=profile.max_concurrent_requests,
         requests_per_minute=profile.requests_per_minute,
+        tokens_per_minute=profile.tokens_per_minute,
         request_timeout_seconds=profile.request_timeout_seconds,
         streaming=profile.streaming,
         profile_id=profile.profile_id,

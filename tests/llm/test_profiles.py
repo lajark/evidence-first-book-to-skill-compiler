@@ -62,6 +62,12 @@ class TestProfileSetValidation:
         )
         assert config.streaming is True
 
+    def test_token_quota_threads_to_runtime_config(self, monkeypatch) -> None:
+        monkeypatch.setenv("LLM_API_KEY", "test-key")
+        profile = _profile(tokens_per_minute=321)
+        config = profile_to_runtime_config(profile)
+        assert config.tokens_per_minute == 321
+
     @pytest.mark.parametrize(
         "override,fragment",
         [

@@ -14,6 +14,7 @@ from book2skill.domain import Locator, LocatorKind, TextBlock
 from book2skill.llm.chunking import ChunkItem
 from book2skill.llm.runtime import (
     ChunkProgressEvent,
+    LLMQuotaExceededError,
     LLMRuntimeConfig,
     LLMRuntimeError,
     LLMUnavailableError,
@@ -254,6 +255,7 @@ def test_resolver_reads_llm_scheduler_environment_values() -> None:
             "LLM_API_KEY": "test-key",
             "BOOK2SKILL_LLM_MAX_CONCURRENT_REQUESTS": "2",
             "BOOK2SKILL_LLM_REQUESTS_PER_MINUTE": "120",
+            "BOOK2SKILL_LLM_TOKENS_PER_MINUTE": "9000",
             "BOOK2SKILL_LLM_REQUEST_TIMEOUT_SECONDS": "12.5",
             "BOOK2SKILL_LLM_STREAMING": "true",
         },
@@ -261,6 +263,7 @@ def test_resolver_reads_llm_scheduler_environment_values() -> None:
 
     assert config.max_concurrent_requests == 2
     assert config.requests_per_minute == 120
+    assert config.tokens_per_minute == 9000
     assert config.request_timeout_seconds == 12.5
     assert config.streaming is True
 
@@ -284,6 +287,55 @@ def test_chunk_runtime_retries_then_opens_circuit() -> None:
         adapter.analyze_chunk("source", [item])
     with pytest.raises(LLMRuntimeError, match="circuit is open"):
         adapter.analyze_chunk("source", [item])
+
+
+def test_token_quota_rejects_request_larger_than_window() -> None:
+    adapter = RuntimeLLMAdapter(
+        LLMRuntimeConfig(
+            provider="openai",
+            model="demo",
+            api_key="test",
+            tokens_per_minute=1,
+        )
+    )
+    item = ChunkItem(
+        "input", "block", "This request is too large", _blocks()[0].locator
+    )
+
+    with pytest.raises(LLMQuotaExceededError, match="tokens_per_minute"):
+        adapter.analyze_chunk("source", [item])
+
+
+def test_token_quota_reserves_a_rolling_window_without_sleeping() -> None:
+    adapter = RuntimeLLMAdapter(
+        LLMRuntimeConfig(
+            provider="openai",
+            model="demo",
+            api_key="test",
+            requests_per_minute=60_000,
+            tokens_per_minute=2,
+        )
+    )
+
+    assert adapter._reserve_request_slot(2) == pytest.approx(0.0)  # noqa: SLF001
+    delay = adapter._reserve_request_slot(1)  # noqa: SLF001
+    assert delay >= 59.0
+
+
+def test_manifest_audits_token_quota() -> None:
+    adapter = RuntimeLLMAdapter(
+        LLMRuntimeConfig(
+            provider="openai",
+            model="demo",
+            api_key="test",
+            tokens_per_minute=1000,
+        )
+    )
+    adapter._provider = _TelemetryProvider()  # noqa: SLF001
+
+    adapter.extract_candidates("source", _blocks())
+
+    assert adapter.manifest.parameters["tokens_per_minute"] == 1000
 
 
 def test_chunk_cache_is_content_addressed_and_persistent(tmp_path) -> None:

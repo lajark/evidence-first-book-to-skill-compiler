@@ -1,0 +1,4 @@
+# Offline smoke input
+
+Keep a short source file for deterministic local verification.
+First inspect the input, then validate the generated bundle before publishing.

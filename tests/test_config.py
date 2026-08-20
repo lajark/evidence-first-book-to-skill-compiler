@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from book2skill.config import load_env_file, resolve_locale
+import pytest
+from typer.testing import CliRunner
+
+from book2skill.config import (
+    ConfigLoadError,
+    load_app_config,
+    load_env_file,
+    resolve_locale,
+)
 from book2skill.llm.runtime import RuntimeLLMAdapter
 
 
@@ -107,6 +116,112 @@ class TestLocaleResolution:
             assert "zh-CN, en" in str(exc)
         else:  # pragma: no cover - assertion guard
             raise AssertionError("unsupported locale must fail")
+
+
+class TestAppConfigContract:
+    """The explicit YAML contract rejects drift before runtime use."""
+
+    def test_loads_example_shape_and_resolves_relative_paths(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "schema_version: 1\n"
+            "language: zh-CN\n"
+            "data_home: ./workspace\n"
+            "default_mode: analyze\n"
+            "network: disabled\n"
+            "cloud_llm:\n  enabled: false\n"
+            "limits:\n  max_input_mb: 200\n"
+            "extensions:\n  supported_manifest_versions: [1]\n"
+            "hosts: [claude, trae, codex]\n",
+            encoding="utf-8",
+        )
+
+        config = load_app_config(config_path)
+
+        assert config.data_home == (tmp_path / "workspace").resolve()
+        assert config.network == "disabled"
+        assert config.hosts == ["claude", "trae", "codex"]
+
+    def test_rejects_unknown_keys_without_echoing_values(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "bad.yaml"
+        config_path.write_text(
+            "schema_version: 1\nlanguage: zh-CN\nunknown: secret-value\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ConfigLoadError) as exc_info:
+            load_app_config(config_path)
+
+        assert "unknown" in str(exc_info.value)
+        assert "secret-value" not in str(exc_info.value)
+
+    def test_cloud_llm_enabled_requires_endpoint_and_model(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = tmp_path / "bad-cloud.yaml"
+        config_path.write_text(
+            "cloud_llm:\n  enabled: true\n", encoding="utf-8"
+        )
+
+        with pytest.raises(ConfigLoadError, match="cloud_llm"):
+            load_app_config(config_path)
+
+    def test_cloud_llm_requires_explicit_network_opt_in(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "cloud-offline.yaml"
+        config_path.write_text(
+            "network: disabled\n"
+            "cloud_llm:\n"
+            "  enabled: true\n"
+            "  base_url: http://localhost/v1\n"
+            "  model: local\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ConfigLoadError, match="network"):
+            load_app_config(config_path)
+
+    def test_cli_config_supplies_locale_and_default_data_home(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("book2skill.config._find_env_file", lambda _start: None)
+        monkeypatch.delenv("BOOK2SKILL_LOCALE", raising=False)
+        source = tmp_path / "notes.txt"
+        source.write_text("A principle with a source.", encoding="utf-8")
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "language: en\ndata_home: ./runtime\n", encoding="utf-8"
+        )
+
+        from book2skill.cli import app
+
+        result = CliRunner().invoke(
+            app,
+            ["--config", str(config_path), "analyze", str(source), "--json"],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        payload = json.loads(result.stdout)
+        assert payload["analysis_run"]["locale"] == "en"
+        source_id = payload["source_ids"][0]
+        assert (
+            tmp_path / "runtime" / "raw" / source_id / "1" / "manifest.json"
+        ).is_file()
+
+    def test_cli_validate_json_is_machine_readable(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("schema_version: 1\n", encoding="utf-8")
+
+        from book2skill.cli import app
+
+        result = CliRunner().invoke(
+            app, ["config", "validate", str(config_path), "--json"]
+        )
+
+        assert result.exit_code == 0
+        assert '"valid": true' in result.stdout
 
 
 class TestCliLlmResolution:

@@ -6,6 +6,8 @@ import hashlib
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from book2skill.application.gate import (
     MAX_FILE_SIZE,
     DiscoveredFile,
@@ -31,6 +33,15 @@ def _make_file(path: Path, content: bytes, *, name: str | None = None) -> Path:
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _make_symlink(target: Path, link: Path) -> Path:
+    """Create a symlink or skip when the host disallows symlink creation."""
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks unavailable on this host: {exc}")
+    return link
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +114,12 @@ class TestExpandPaths:
         result = gate._expand_paths([], glob=False, recursive=False)
         assert result == []
 
+    def test_explicit_symlink_is_preserved_for_validation(self, tmp_path: Path) -> None:
+        target = _make_file(tmp_path, b"safe", name="target.txt")
+        link = _make_symlink(target, tmp_path / "link.txt")
+        result = Gate._expand_paths([str(link)], glob=False, recursive=False)
+        assert result == [link.absolute()]
+
 
 # ---------------------------------------------------------------------------
 # Basic validation
@@ -151,6 +168,13 @@ class TestValidateBasic:
         gate = Gate()
         err = gate._validate_basic(f)
         assert err is None
+
+    def test_symlink_file_is_rejected(self, tmp_path: Path) -> None:
+        target = _make_file(tmp_path, b"safe", name="target.txt")
+        link = _make_symlink(target, tmp_path / "link.txt")
+        err = Gate()._validate_basic(link)
+        assert err is not None
+        assert err.code == ErrorCode.GATE_SYMLINK_NOT_ALLOWED
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +508,24 @@ class TestDiscoverEndToEnd:
         files, errors = gate.discover([])
         assert files == []
         assert errors == []
+
+    def test_recursive_discovery_rejects_symlink_file(self, tmp_path: Path) -> None:
+        target = _make_file(tmp_path, b"safe", name="target.txt")
+        _make_symlink(target, tmp_path / "sub" / "link.txt")
+        files, errors = Gate().discover([str(tmp_path)], glob=False)
+        assert files == []
+        assert [error.code for error in errors] == [
+            ErrorCode.GATE_SYMLINK_NOT_ALLOWED
+        ]
+
+    def test_symlink_directory_is_not_traversed(self, tmp_path: Path) -> None:
+        target_dir = tmp_path / "target"
+        _make_file(target_dir, b"safe", name="inside.txt")
+        link_dir = _make_symlink(target_dir, tmp_path / "linked-dir")
+        files, errors = Gate().discover([str(link_dir)], glob=False)
+        assert files == []
+        assert len(errors) == 1
+        assert errors[0].code == ErrorCode.GATE_SYMLINK_NOT_ALLOWED
 
 
 # ---------------------------------------------------------------------------

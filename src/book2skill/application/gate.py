@@ -255,15 +255,42 @@ class Gate:
                 base = Path(*parts[:glob_idx])
                 pattern = str(Path(*parts[glob_idx:]))
 
+                # Do not let a glob traverse a symlinked directory.  Keep the
+                # link as a candidate so ``_validate_basic`` returns a stable
+                # error instead of silently dropping user input.
+                symlink = _find_symlink_component(base)
+                if symlink is not None:
+                    candidate = base.absolute()
+                    if candidate not in seen:
+                        seen.add(candidate)
+                        result.append(candidate)
+                    continue
+
                 if base.exists() and base.is_dir():
                     for match in sorted(base.glob(pattern)):
-                        abs_match = match.resolve()
-                        if abs_match.is_file() and abs_match not in seen:
-                            seen.add(abs_match)
-                            result.append(abs_match)
+                        abs_match = match.absolute()
+                        if _find_symlink_component(abs_match) is not None:
+                            candidate = abs_match
+                        elif abs_match.is_file():
+                            candidate = abs_match.resolve()
+                        else:
+                            continue
+                        if candidate not in seen:
+                            seen.add(candidate)
+                            result.append(candidate)
                 continue
 
-            resolved = raw_path.resolve()
+            # Resolve only trusted paths.  Resolving first would erase the
+            # fact that the user supplied a symlink and could escape the
+            # intended input directory.
+            if _find_symlink_component(raw_path) is not None:
+                candidate = raw_path.absolute()
+                if candidate not in seen:
+                    seen.add(candidate)
+                    result.append(candidate)
+                continue
+
+            resolved = raw_path.absolute().resolve()
             if resolved.is_dir():
                 for fpath in _walk_files(resolved, recursive=recursive):
                     if fpath not in seen:
@@ -280,7 +307,20 @@ class Gate:
     @staticmethod
     def _validate_basic(path: Path) -> GateError | None:
         """Check existence, readability, size and emptiness."""
-        resolved = path.resolve()
+        absolute = path.absolute()
+        symlink = _find_symlink_component(absolute)
+        if symlink is not None:
+            return GateError(
+                path=absolute,
+                code=ErrorCode.GATE_SYMLINK_NOT_ALLOWED,
+                message=f"Symbolic links are not allowed: {symlink}",
+                recovery=(
+                    "Provide a regular file or directory path instead of a "
+                    "symbolic link."
+                ),
+            )
+
+        resolved = absolute.resolve()
 
         if not resolved.exists():
             return GateError(
@@ -441,12 +481,62 @@ def _has_glob_chars(s: str) -> bool:
 
 
 def _walk_files(root: Path, *, recursive: bool) -> list[Path]:
-    """List regular files under *root*, sorted by path."""
-    if recursive:
-        paths = [p for p in sorted(root.rglob("*")) if p.is_file()]
-    else:
-        paths = [p for p in sorted(root.iterdir()) if p.is_file()]
-    return paths
+    """List files under *root* without following symbolic links.
+
+    Symlink entries are returned as candidates so the gate can report an
+    explicit ``GATE_SYMLINK_NOT_ALLOWED`` error.  Real files are canonicalised
+    only after the containment check; this prevents recursive discovery from
+    escaping its root through a link or a concurrent path substitution.
+    """
+    root = root.absolute().resolve()
+    paths: list[Path] = []
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            candidate = entry.absolute()
+            if _find_symlink_component(candidate) is not None:
+                paths.append(candidate)
+                continue
+            try:
+                canonical = candidate.resolve()
+                canonical.relative_to(root)
+            except (OSError, ValueError):
+                # A non-link escape should not be possible, but fail closed if
+                # the filesystem changes while discovery is in progress.
+                paths.append(candidate)
+                continue
+            if entry.is_file():
+                paths.append(canonical)
+            elif recursive and entry.is_dir():
+                pending.append(canonical)
+    return sorted(paths)
+
+
+def _find_symlink_component(path: Path) -> Path | None:
+    """Return the first symlink in *path* or one of its parent components.
+
+    ``Path.resolve`` follows links, so this check must run on an absolute but
+    unresolved path.  Checking parents also catches ``link-dir/file.txt``
+    where the leaf itself is not a symlink.
+    """
+    try:
+        absolute = Path(os.path.abspath(os.fspath(path)))
+    except (OSError, TypeError):
+        absolute = path
+    for candidate in (absolute, *absolute.parents):
+        try:
+            if candidate.is_symlink():
+                return candidate
+        except OSError:
+            # Let the normal readability/stat checks produce the actionable
+            # error for inaccessible paths.
+            continue
+    return None
 
 
 def _detect_by_content(path: Path) -> SourceFormat | None:

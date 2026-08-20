@@ -15,6 +15,7 @@ import os
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -69,6 +70,10 @@ class LLMUnavailableError(LLMRuntimeError):
     """Raised when a configured real provider cannot be initialized."""
 
 
+class LLMQuotaExceededError(LLMRuntimeError):
+    """Raised when one request cannot fit within the configured token quota."""
+
+
 class LLMResponseError(LLMRuntimeError):
     """Raised when a real provider response cannot satisfy the contract."""
 
@@ -90,6 +95,7 @@ class LLMRuntimeConfig:
     circuit_failure_threshold: int = 3
     max_concurrent_requests: int = 2
     requests_per_minute: int = 15
+    tokens_per_minute: int | None = None
     request_timeout_seconds: float = 30.0
     streaming: bool = False
     # Profile/routing provenance. ``profile_id`` identifies the channel a
@@ -110,6 +116,8 @@ class LLMRuntimeConfig:
             raise ValueError("LLM retry and circuit thresholds are invalid")
         if self.max_concurrent_requests < 1 or self.requests_per_minute < 1:
             raise ValueError("LLM scheduler limits must be positive")
+        if self.tokens_per_minute is not None and self.tokens_per_minute < 1:
+            raise ValueError("LLM token quota must be positive when configured")
         if self.request_timeout_seconds <= 0:
             raise ValueError("LLM request timeout must be positive")
         if self.locale not in {"zh-CN", "en"}:
@@ -199,6 +207,8 @@ class RuntimeLLMAdapter:
         self._state_lock = threading.Lock()
         self._rate_lock = threading.Lock()
         self._next_request_start = 0.0
+        self._token_reservations: deque[tuple[float, int]] = deque()
+        self._reserved_tokens = 0
         from book2skill.llm.mock_adapter import MockLLMAdapter
 
         self._fallback = MockLLMAdapter()
@@ -365,7 +375,15 @@ class RuntimeLLMAdapter:
         )
         started = time.monotonic()
         try:
-            result = self._retry_synthesis(source_id, level, candidates, structure)
+            result = self._retry_synthesis(
+                source_id,
+                level,
+                candidates,
+                structure,
+                estimated_tokens=input_tokens,
+            )
+        except LLMQuotaExceededError:
+            raise
         except LLMRuntimeError as exc:
             if self._config.provider == "openai" and self._config.allow_fallback:
                 result = self._dispatch_synthesis(
@@ -390,6 +408,16 @@ class RuntimeLLMAdapter:
         endpoint or source text beyond the extracted content).
         """
         reviewer = cast("_ReviewAdapter", self._provider)
+        delay = self._reserve_request_slot(
+            max(
+                1,
+                estimate_tokens(
+                    json.dumps(card, ensure_ascii=False, separators=(",", ":"))
+                ),
+            )
+        )
+        if delay > 0:
+            time.sleep(delay)
         try:
             result = reviewer.review_evidence(card)
         except LLMRuntimeError as exc:
@@ -410,11 +438,13 @@ class RuntimeLLMAdapter:
         level: Literal["chapter", "book"],
         candidates: list[dict[str, object]],
         structure: list[dict[str, object]] | None = None,
+        *,
+        estimated_tokens: int,
     ) -> list[dict[str, object]]:
         """Use the same start-rate budget and bounded retry policy as Map."""
         last_error: LLMRuntimeError | None = None
         for attempt in range(1, self._config.max_retries + 2):
-            delay = self._reserve_request_slot()
+            delay = self._reserve_request_slot(estimated_tokens)
             if delay > 0:
                 time.sleep(delay)
             try:
@@ -468,6 +498,8 @@ class RuntimeLLMAdapter:
         try:
             started = time.monotonic()
             result = self._retry_chunk(source_id, items, on_status=on_status)
+        except LLMQuotaExceededError:
+            raise
         except LLMRuntimeError as exc:
             with self._state_lock:
                 self._consecutive_failures += 1
@@ -810,9 +842,10 @@ class RuntimeLLMAdapter:
         on_status: Callable[[ChunkStatus, int, float], None] | None,
     ) -> dict[str, list[dict[str, object]]]:
         last_error: LLMRuntimeError | None = None
+        estimated_tokens = max(1, _chunk_input_tokens(items))
         for attempt in range(1, self._config.max_retries + 2):
             try:
-                delay = self._reserve_request_slot()
+                delay = self._reserve_request_slot(estimated_tokens)
                 if on_status is not None and delay > 0:
                     on_status("rate_limited", attempt, delay)
                 if delay > 0:
@@ -820,6 +853,8 @@ class RuntimeLLMAdapter:
                 if on_status is not None:
                     on_status("running", attempt, 0.0)
                 return self._chunk_dispatch(self._provider, source_id, items)
+            except LLMQuotaExceededError:
+                raise
             except LLMRuntimeError as exc:
                 last_error = exc
                 if on_status is not None and attempt <= self._config.max_retries:
@@ -827,14 +862,54 @@ class RuntimeLLMAdapter:
         assert last_error is not None
         raise last_error
 
-    def _reserve_request_slot(self) -> float:
-        """Reserve a rate-limited request start and return its required delay."""
+    def _reserve_request_slot(self, estimated_tokens: int = 0) -> float:
+        """Reserve request and estimated-input-token budgets.
+
+        The request budget uses a paced start schedule.  The optional token
+        budget uses a rolling 60-second reservation window, so concurrent
+        workers cannot collectively exceed ``tokens_per_minute``.  A single
+        request larger than the window fails immediately because waiting can
+        never make that request fit.
+        """
         if self._config.provider == "mock":
             return 0.0
+        if estimated_tokens < 0:
+            raise ValueError("estimated token count must not be negative")
         interval = 60.0 / self._config.requests_per_minute
         with self._rate_lock:
             now = time.monotonic()
             scheduled = max(now, self._next_request_start)
+
+            token_limit = self._config.tokens_per_minute
+            if token_limit is not None:
+                if estimated_tokens > token_limit:
+                    raise LLMQuotaExceededError(
+                        "Estimated request input tokens exceed the configured "
+                        f"tokens_per_minute quota ({estimated_tokens} > "
+                        f"{token_limit})."
+                    )
+                while self._token_reservations and (
+                    self._token_reservations[0][0] + 60.0 <= now
+                ):
+                    _, released = self._token_reservations.popleft()
+                    self._reserved_tokens -= released
+                while self._reserved_tokens + estimated_tokens > token_limit:
+                    if not self._token_reservations:
+                        # Defensive guard: the single-request check above
+                        # should make this unreachable.
+                        raise LLMQuotaExceededError(
+                            "Unable to reserve the configured token quota."
+                        )
+                    scheduled = max(
+                        scheduled, self._token_reservations[0][0] + 60.0
+                    )
+                    while self._token_reservations and (
+                        self._token_reservations[0][0] + 60.0 <= scheduled
+                    ):
+                        _, released = self._token_reservations.popleft()
+                        self._reserved_tokens -= released
+                self._token_reservations.append((scheduled, estimated_tokens))
+                self._reserved_tokens += estimated_tokens
             self._next_request_start = scheduled + interval
         delay = scheduled - now
         return delay
@@ -848,9 +923,10 @@ class RuntimeLLMAdapter:
         # Retry transient failures (incl. malformed JSON) like the chunk path,
         # reserving a rate-limited start slot per attempt, before fallback.
         last_error: LLMRuntimeError | None = None
+        estimated_tokens = _payload_input_tokens(payload)
         for _attempt in range(1, self._config.max_retries + 2):
             try:
-                delay = self._reserve_request_slot()
+                delay = self._reserve_request_slot(estimated_tokens)
                 if delay > 0:
                     time.sleep(delay)
                 result = self._dispatch(
@@ -858,6 +934,8 @@ class RuntimeLLMAdapter:
                 )
                 self._record(operation, "success", result, None)
                 return result
+            except LLMQuotaExceededError:
+                raise
             except LLMRuntimeError as exc:
                 last_error = exc
         assert last_error is not None
@@ -965,7 +1043,7 @@ class RuntimeLLMAdapter:
             )
 
     def _audit_parameters(self) -> dict[str, float | int | str | bool]:
-        return {
+        parameters: dict[str, float | int | str | bool] = {
             "temperature": self._config.temperature,
             "max_retries": self._config.max_retries,
             "max_concurrent_requests": self._config.max_concurrent_requests,
@@ -973,6 +1051,9 @@ class RuntimeLLMAdapter:
             "request_timeout_seconds": self._config.request_timeout_seconds,
             "streaming": self._config.streaming,
         }
+        if self._config.tokens_per_minute is not None:
+            parameters["tokens_per_minute"] = self._config.tokens_per_minute
+        return parameters
 
 
 def _metric_float(value: object) -> float | None:
@@ -1043,6 +1124,7 @@ def resolve_runtime_config(
             f"Unknown LLM adapter '{resolved}'. Expected 'mock', 'openai', "
             "or 'compatible'."
         )
+    token_quota = pick(None, ("BOOK2SKILL_LLM_TOKENS_PER_MINUTE",))
     return LLMRuntimeConfig(
         provider="openai",
         model=pick(model, ("LLM_MODEL", "OPENAI_MODEL"), "gpt-4o") or "gpt-4o",
@@ -1057,6 +1139,15 @@ def resolve_runtime_config(
         ),
         requests_per_minute=int(
             parse_setting(("BOOK2SKILL_LLM_REQUESTS_PER_MINUTE",), 15, int)
+        ),
+        tokens_per_minute=(
+            int(
+                parse_setting(
+                    ("BOOK2SKILL_LLM_TOKENS_PER_MINUTE",), 1, int
+                )
+            )
+            if token_quota is not None
+            else None
         ),
         request_timeout_seconds=float(
             parse_setting(
@@ -1124,11 +1215,28 @@ def _chunk_input_tokens(items: list[ChunkItem]) -> int:
     )
 
 
+def _payload_input_tokens(
+    payload: list[TextBlock] | list[dict[str, object]],
+) -> int:
+    """Estimate input tokens for non-chunk operations without sending text to logs."""
+    serializable = [
+        item.model_dump(mode="json") if isinstance(item, TextBlock) else item
+        for item in payload
+    ]
+    return max(
+        1,
+        estimate_tokens(
+            json.dumps(serializable, ensure_ascii=False, separators=(",", ":"))
+        ),
+    )
+
+
 __all__ = [
     "AnalysisRunManifest",
     "LLMInvocation",
     "LLMResponseError",
     "LLMRuntimeConfig",
+    "LLMQuotaExceededError",
     "LLMRuntimeError",
     "LLMUnavailableError",
     "RuntimeLLMAdapter",

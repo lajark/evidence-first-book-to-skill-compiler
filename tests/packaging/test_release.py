@@ -58,7 +58,11 @@ class TestReleasePackage:
                 "README_INSTALL.md",
                 ".env.example",
                 "llm-profiles.example.yaml",
+                "config.example.yaml",
+                "CHANGELOG.md",
                 "docs/LLM_CONFIG.md",
+                "docs/CONFIG.md",
+                "docs/STATE_MACHINE.md",
                 "input/README.md",
                 "output/README.md",
                 "output/bundles/.gitkeep",
@@ -84,6 +88,10 @@ class TestReleasePackage:
             assert zf.read("llm-profiles.example.yaml") == (
                 repo_root / "llm-profiles.example.yaml"
             ).read_bytes()
+            assert zf.read("config.example.yaml") == (
+                repo_root / "config.example.yaml"
+            ).read_bytes()
+            assert zf.read("CHANGELOG.md") == (repo_root / "CHANGELOG.md").read_bytes()
             assert "llm-profiles.local.yaml" not in _zip_members(zf)
 
     def test_installer_script_is_safe(self, repo_root: Path, tmp_path: Path) -> None:

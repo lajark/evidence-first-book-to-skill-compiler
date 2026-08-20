@@ -10,6 +10,7 @@ from book2skill.llm.openai_adapter import OpenAIAdapter
 from book2skill.llm.ports import LLMAdapter
 from book2skill.llm.runtime import (
     AnalysisRunManifest,
+    LLMQuotaExceededError,
     LLMRuntimeConfig,
     LLMRuntimeError,
     RuntimeLLMAdapter,
@@ -20,6 +21,7 @@ from book2skill.llm.runtime import (
 __all__ = [
     "AnalysisRunManifest",
     "LLMAdapter",
+    "LLMQuotaExceededError",
     "LLMRuntimeConfig",
     "LLMRuntimeError",
     "MockLLMAdapter",

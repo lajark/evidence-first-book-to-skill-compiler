@@ -25,7 +25,19 @@ from rich.progress import (
 
 from book2skill import __version__
 from book2skill.application.progress import ProgressEvent, ProgressReporter
-from book2skill.config import Locale, load_env_file, resolve_locale
+from book2skill.cli_support import build_llm_adapter as _build_llm_adapter_impl
+from book2skill.config import (
+    AppConfig,
+    ConfigLoadError,
+    Locale,
+    load_app_config,
+    load_env_file,
+    resolve_locale,
+)
+from book2skill.config_cli import config_app
+from book2skill.diagnostics import configure as configure_diagnostics
+from book2skill.diagnostics import emit as emit_diagnostic
+from book2skill.diagnostics import start_run as start_diagnostic_run
 from book2skill.extensions.cli import extensions_app
 from book2skill.llm.profiles import ProviderProfileSet
 from book2skill.llm.quality import QualityService
@@ -36,6 +48,9 @@ if TYPE_CHECKING:
 
 app = typer.Typer(name="book2skill", help="Book2Skill CLI")
 _active_locale: ContextVar[Locale] = ContextVar("book2skill_locale", default="zh-CN")
+_active_config: ContextVar[AppConfig | None] = ContextVar(
+    "book2skill_config", default=None
+)
 
 #: Runtime artefacts live below one visible root by default.  Paths remain
 #: relative to the command's current working directory so a caller can choose
@@ -77,13 +92,99 @@ def main(
         "--locale",
         help="Human-readable output locale: zh-CN (default) or en.",
     ),
+    diagnostic_log: Path | None = typer.Option(
+        None,
+        "--diagnostic-log",
+        help=(
+            "Write redacted local JSONL diagnostics to this path "
+            "(disabled by default)."
+        ),
+    ),
+    config_path: Path | None = typer.Option(
+        None,
+        "--config",
+        help=(
+            "Load and validate a YAML config. It is opt-in; explicit CLI "
+            "and environment values keep precedence."
+        ),
+    ),
 ) -> None:
     """Configure process-local CLI presentation settings."""
+    configured: AppConfig | None = None
+    if config_path is not None:
+        try:
+            configured = load_app_config(config_path)
+        except ConfigLoadError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--config") from exc
+    _active_config.set(configured)
+    env_file = load_env_file()
     try:
-        resolved = resolve_locale(locale, env_file=load_env_file())
+        resolved = resolve_locale(
+            locale,
+            env_file=env_file,
+            configured_locale=configured.language if configured else None,
+        )
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--locale") from exc
     _active_locale.set(resolved)
+    try:
+        configure_diagnostics(diagnostic_log)
+    except OSError as exc:
+        raise typer.BadParameter(
+            f"Could not configure diagnostic log: {exc}",
+            param_hint="--diagnostic-log",
+        ) from exc
+    start_diagnostic_run()
+    if configured is not None:
+        emit_diagnostic(
+            "config_loaded",
+            code="CONFIG_VALID",
+            stage="cli.config",
+            details={
+                "schema_version": configured.schema_version,
+                "language": configured.language,
+                "network": configured.network,
+                "hosts": ",".join(configured.hosts),
+                "cloud_llm_enabled": configured.cloud_llm.enabled,
+            },
+        )
+
+
+def _configured_data_home(data_home: Path | None) -> Path | None:
+    """Apply an explicit config data root only to an omitted CLI default."""
+    configured = _active_config.get()
+    if configured is not None and data_home in {None, _DEFAULT_DATA_HOME}:
+        return configured.data_home
+    return data_home
+
+
+def _configured_llm_defaults(
+    kind: str | None,
+    model: str | None,
+    base_url: str | None,
+    *,
+    env_file: dict[str, str],
+) -> tuple[str | None, str | None, str | None]:
+    """Use opt-in cloud defaults only when no higher-priority provider exists."""
+    configured = _active_config.get()
+    if (
+        configured is None
+        or not configured.cloud_llm.enabled
+        or kind is not None
+        or model is not None
+        or base_url is not None
+        or "BOOK2SKILL_LLM" in env_file
+    ):
+        return kind, model, base_url
+    import os
+
+    if os.environ.get("BOOK2SKILL_LLM"):
+        return kind, model, base_url
+    return (
+        "compatible",
+        configured.cloud_llm.model,
+        configured.cloud_llm.base_url,
+    )
 
 
 def _write_stdout_utf8(text: str) -> None:
@@ -166,6 +267,13 @@ def _exit_output_write_failed(
 ) -> None:
     """Report a local output failure while keeping JSON stdout parseable."""
     message = f"Could not write output under {target}: {exc}"
+    emit_diagnostic(
+        "output_write_failed",
+        code="OUTPUT_WRITE_FAILED",
+        stage="cli.output",
+        message=message,
+        details={"exception_type": type(exc).__name__},
+    )
     _print_diagnostic(
         f"[red]ERROR[/red] OUTPUT_WRITE_FAILED: {message}",
         json_output=json_output,
@@ -209,6 +317,13 @@ def _emit_fatal_error(exc: BaseException, *, json_output: bool) -> None:
             "Check BOOK2SKILL_LLM / LLM_API_KEY / LLM_MODEL / LLM_BASE_URL "
             "and retry, or pass --allow-llm-fallback to use the offline Mock."
         )
+    emit_diagnostic(
+        "fatal_error",
+        code=code,
+        stage="cli",
+        message=message,
+        details={"exception_type": type(exc).__name__},
+    )
     diagnostic = f"[red]ERROR[/red] {code}: {message}"
     if recovery:
         diagnostic += f" (recovery: {recovery})"
@@ -221,6 +336,7 @@ def _print_diagnostic(message: str, *, json_output: bool) -> None:
     """Route human diagnostics away from a JSON command's stdout channel."""
     ( _stderr_console if json_output else console).print(message)
 app.add_typer(extensions_app)
+app.add_typer(config_app)
 console = Console()
 
 # Progress goes to stderr so ``--json`` stdout stays clean for piping.
@@ -431,80 +547,21 @@ def _build_llm_adapter(
     llm_profile: str | None = None,
     llm_strategy: str = "single",
 ) -> LLMAdapter:
-    """Resolve the shared runtime and build its auditable adapter.
-
-    ``balanced`` strategy fans Map work across the profiles in
-    ``llm_profiles``; it requires the profile set. The ``single`` strategy
-    builds one adapter from ``llm_profile`` (or the legacy env resolution).
-    Credentials are always read from profile env-var names or the environment
-    and never enter argv, config, manifests, caches or logs.
-    """
-    from book2skill.llm.profiles import (
-        load_profile_set,
-        profile_to_runtime_config,
-    )
-    from book2skill.llm.router import RouterLLMAdapter
-    from book2skill.llm.runtime import (
-        LLMRuntimeError,
-        build_llm_adapter,
-        default_timing_history_path,
-        resolve_runtime_config,
-    )
-
+    """Compatibility facade for the shared runtime construction seam."""
     env_file = load_env_file()
-    if llm_strategy == "balanced":
-        if not llm_profiles:
-            raise typer.BadParameter(
-                "--llm-strategy balanced requires --llm-profiles <path>."
-            )
-        try:
-            profile_set = load_profile_set(llm_profiles)
-        except (LLMRuntimeError, ValueError) as exc:
-            raise typer.BadParameter(str(exc)) from exc
-        return RouterLLMAdapter(
-            profile_set,
-            allow_fallback=allow_fallback,
-            locale=_active_locale.get(),
-            data_home=data_home,
-            env_file=env_file,
-        )
-
-    try:
-        if llm_profiles:
-            profile_set = load_profile_set(llm_profiles)
-            try:
-                profile = profile_set.profile(llm_profile)
-            except KeyError as exc:
-                raise typer.BadParameter(str(exc)) from exc
-            config = profile_to_runtime_config(
-                profile,
-                allow_fallback=allow_fallback,
-                locale=_active_locale.get(),
-                env_file=env_file,
-            )
-        else:
-            config = resolve_runtime_config(
-                kind,
-                model=model,
-                base_url=base_url,
-                allow_fallback=allow_fallback,
-                locale=_active_locale.get(),
-                env_file=env_file,
-            )
-    except (LLMRuntimeError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    cache_root = data_home / ".cache" / "llm" if data_home is not None else None
-    timing_history_path = None
-    if config.provider == "openai":
-        timing_history_path = (
-            data_home / ".cache" / "performance-history.json"
-            if data_home is not None
-            else default_timing_history_path()
-        )
-    return build_llm_adapter(
-        config,
-        cache_root=cache_root,
-        timing_history_path=timing_history_path,
+    kind, model, base_url = _configured_llm_defaults(
+        kind, model, base_url, env_file=env_file
+    )
+    return _build_llm_adapter_impl(
+        kind,
+        model=model,
+        base_url=base_url,
+        allow_fallback=allow_fallback,
+        data_home=_configured_data_home(data_home),
+        llm_profiles=llm_profiles,
+        llm_profile=llm_profile,
+        llm_strategy=llm_strategy,
+        locale=_active_locale.get(),
     )
 
 
@@ -765,6 +822,9 @@ def analyze(
     from book2skill.domain.errors import DomainError
     from book2skill.llm.runtime import LLMRuntimeError
 
+    configured_data_home = _configured_data_home(data_home)
+    assert configured_data_home is not None
+    data_home = configured_data_home
     adapter = _build_llm_adapter(
         llm,
         model=llm_model,
@@ -939,6 +999,9 @@ def batch(
     from book2skill.domain.errors import DomainError
     from book2skill.llm.runtime import LLMRuntimeError
 
+    configured_data_home = _configured_data_home(data_home)
+    assert configured_data_home is not None
+    data_home = configured_data_home
     adapter = _build_llm_adapter(
         llm,
         model=llm_model,
@@ -1131,6 +1194,9 @@ def build(
     from book2skill.compiler import SkillSpec
     from book2skill.domain.errors import DomainError
 
+    configured_data_home = _configured_data_home(data_home)
+    assert configured_data_home is not None
+    data_home = configured_data_home
     if not sources and from_analysis is None:
         raise typer.BadParameter(
             "Provide SOURCES or use --from-analysis <bundle.json>."
@@ -1285,8 +1351,8 @@ def update(
         help="New source files, directories or globs to fold in (omit with "
         "--rollback).",
     ),
-    data_home: Path = typer.Option(
-        ...,
+    data_home: Path | None = typer.Option(
+        None,
         "--data-home",
         help="Data root with the Schema collection and snapshot store.",
     ),
@@ -1383,6 +1449,12 @@ def update(
     from book2skill.application.update import UpdateUseCase
     from book2skill.compiler import SkillSpec
     from book2skill.domain.errors import DomainError
+
+    data_home = _configured_data_home(data_home)
+    if data_home is None:
+        raise typer.BadParameter(
+            "--data-home is required unless --config supplies data_home."
+        )
 
     if rollback:
         if new_sources:
@@ -1571,6 +1643,7 @@ def diff(
     from book2skill.storage.override_storage import OverrideStorage
     from book2skill.storage.schema_storage import KnowledgeSchemaStorage
 
+    data_home = _configured_data_home(data_home)
     schema_storage = (
         KnowledgeSchemaStorage(data_home) if data_home is not None else None
     )

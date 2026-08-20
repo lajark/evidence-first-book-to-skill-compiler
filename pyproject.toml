@@ -159,6 +159,12 @@ module = [
 ]
 ignore_missing_imports = true
 
+# Imported selectively-ported modules must remain outside the strict type
+# checking boundary as well as outside recursive module discovery.
+[[tool.mypy.overrides]]
+module = ["book2skill.extractors._vendor.*"]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

@@ -175,23 +175,32 @@ def _copy_static(repo: Path, pkg_root: Path, version: str) -> None:
             dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     # Ship public user guidance and config templates verbatim. Local profile
     # files are intentionally excluded because they belong to each deployment.
-    for filename in ("README.md", ".env.example", "llm-profiles.example.yaml"):
+    for filename in (
+        "README.md",
+        ".env.example",
+        "llm-profiles.example.yaml",
+        "config.example.yaml",
+    ):
         source = repo / filename
         if not source.is_file():
             raise ReleaseError(f"required release file not found: {source}")
         shutil.copy2(source, pkg_root / filename)
-    llm_guide = repo / "docs" / "LLM_CONFIG.md"
-    if llm_guide.is_file():
+    docs_source = repo / "docs"
+    docs_to_ship = ("LLM_CONFIG.md", "CONFIG.md", "STATE_MACHINE.md")
+    if any((docs_source / filename).is_file() for filename in docs_to_ship):
         docs_target = pkg_root / "docs"
         docs_target.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(llm_guide, docs_target / "LLM_CONFIG.md")
+        for filename in docs_to_ship:
+            source = docs_source / filename
+            if source.is_file():
+                shutil.copy2(source, docs_target / filename)
     (pkg_root / "README_INSTALL.md").write_text(
         _README_INSTALL_TEMPLATE.format(version=version), encoding="utf-8"
     )
-    (pkg_root / "CHANGELOG.md").write_text(
-        f"# Changelog\n\n## {version}\n\n- Initial Core release package.\n",
-        encoding="utf-8",
-    )
+    changelog = repo / "CHANGELOG.md"
+    if not changelog.is_file():
+        raise ReleaseError(f"required release file not found: {changelog}")
+    shutil.copy2(changelog, pkg_root / "CHANGELOG.md")
 
 
 def _write_runtime_layout(pkg_root: Path) -> None:

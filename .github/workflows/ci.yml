@@ -68,3 +68,20 @@ jobs:
         run: python -c "import importlib; importlib.import_module('${{ matrix.module }}')"
       - name: Verify project imports with the selected extra
         run: python -c "import book2skill; print(book2skill.__version__)"
+
+  coverage:
+    name: coverage gate (Python 3.13)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install locked core and development dependencies
+        run: python -m pip install -r requirements-lock.txt
+      - name: Install project without re-resolving dependencies
+        run: python -m pip install -e . --no-deps
+      # 85% is below the current 88% baseline and prevents silent regression
+      # without turning this first gate into a large historical cleanup.
+      - name: Test with coverage gate
+        run: python -m pytest -q --cov=book2skill --cov-report=term --cov-fail-under=85

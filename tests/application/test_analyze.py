@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -10,7 +11,8 @@ from pydantic import ValidationError
 
 from book2skill.application.analyze import AnalyzeUseCase
 from book2skill.application.models import AnalysisBundle, CandidateUnit
-from book2skill.domain import SourceFormat, TextBlock
+from book2skill.domain import ErrorCode, SourceFormat, TextBlock
+from book2skill.extractors.base import ExtractionResult
 from book2skill.extractors.registry import ExtractorRegistry
 from book2skill.extractors.text_extractor import TextExtractor
 from book2skill.llm.mock_adapter import MockLLMAdapter
@@ -278,6 +280,58 @@ class TestAnalyzeUseCase:
 
         assert result.bundle is not None
         assert extractor.calls == 1
+
+    def test_invalid_extraction_is_rejected_before_raw_or_llm(
+        self, tmp_path: Path
+    ) -> None:
+        class InvalidMapExtractor(TextExtractor):
+            def extract_result(
+                self,
+                path: Path,
+                *,
+                source_id: str,
+                source_format: SourceFormat,
+                content_sha256: str | None = None,
+                version: int = 1,
+                original_name: str | None = None,
+                rights_note: str | None = None,
+            ) -> ExtractionResult:
+                result = super().extract_result(
+                    path,
+                    source_id=source_id,
+                    source_format=source_format,
+                    content_sha256=content_sha256,
+                    version=version,
+                    original_name=original_name,
+                    rights_note=rights_note,
+                )
+                bad_entry = result.entries[0].model_copy(
+                    update={"text_sha256": "0" * 64}
+                )
+                return ExtractionResult(
+                    manifest=result.manifest,
+                    blocks=result.blocks,
+                    entries=(bad_entry,),
+                )
+
+        source = _write_txt(
+            tmp_path / "book.txt", "A paragraph with enough content."
+        )
+        extractor = InvalidMapExtractor()
+        registry = ExtractorRegistry()
+        registry.register(SourceFormat.TXT, extractor)
+        data_home = tmp_path / "data"
+
+        result = AnalyzeUseCase(
+            registry=registry, data_home=data_home
+        ).execute([str(source)])
+
+        assert result.bundle is None
+        assert [error.code for error in result.errors] == [
+            ErrorCode.EXTRACT_RESULT_INVALID
+        ]
+        source_id = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+        assert not FileRawStorage(data_home).exists(source_id, 1)
 
     def test_analyze_persists_original_and_trusted_extraction_map(
         self, tmp_path: Path

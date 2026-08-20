@@ -32,6 +32,7 @@ cp .env.example .env    # 从模板复制（.env 已被 .gitignore 排除，不�
 | `LLM_MODEL` | 模型名 | `qwen-plus` | `qwen2.5:7b` |
 | `BOOK2SKILL_LLM_MAX_CONCURRENT_REQUESTS` | 同时在途请求上限；云端默认 `2` | `2` | `1`–`2` |
 | `BOOK2SKILL_LLM_REQUESTS_PER_MINUTE` | 请求启动速率；云端默认 `15` | `15` | `30` |
+| `BOOK2SKILL_LLM_TOKENS_PER_MINUTE` | 可选的输入 Token 滚动窗口上限；留空不启用 | 留空 | 按供应商配额 |
 | `BOOK2SKILL_LLM_REQUEST_TIMEOUT_SECONDS` | 单请求超时秒数 | `180` | `60` |
 | `BOOK2SKILL_LLM_STREAMING` | 单 provider 是否请求流式响应；`true`/`false` | `true` | `true` |
 
@@ -63,6 +64,12 @@ book2skill batch ./docs/ --json
 账户和兼容端点准备的保守起点，而非对供应商配额的保证。遇到 `429` 或超时
 时，应先降为 `1` 并发并按供应商的 `Retry-After`/控制台配额调整，切勿为缩短
 单次任务而盲目提高并发。
+
+若供应商同时提供 TPM（Tokens Per Minute）配额，可设置
+`BOOK2SKILL_LLM_TOKENS_PER_MINUTE`。运行时按请求输入内容估算 Token，在
+60 秒滚动窗口中预留额度；单个请求超过窗口上限会立即 fail-closed，不会
+通过重试或 Mock 回退绕过配额。多 provider profile 可在各 profile 中使用
+`tokens_per_minute` 覆盖该限制。
 
 对于 EPUB，Book2Skill 保留 spine 章节边界，以约 1,200 Token 的限长证据卡 →
 章节综合 → 全书综合处理。综合阶段只传递前一层的结构化卡片，不会重复上传整章原文；
