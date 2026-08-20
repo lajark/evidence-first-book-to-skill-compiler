@@ -642,7 +642,9 @@ def test_chunk_scheduler_rate_limits_real_provider_request_starts() -> None:
             model="demo",
             api_key="test",
             max_concurrent_requests=3,
-            requests_per_minute=6_000,
+            # Keep a comfortably measurable interval across Windows timer
+            # resolutions and busy hosted runners.
+            requests_per_minute=1_200,
         )
     )
     provider = _TimestampProvider()
@@ -654,4 +656,4 @@ def test_chunk_scheduler_rate_limits_real_provider_request_starts() -> None:
 
     starts = sorted(provider.starts)
     assert len(starts) == 3
-    assert starts[1] - starts[0] >= 0.005
+    assert starts[1] - starts[0] >= 0.02
