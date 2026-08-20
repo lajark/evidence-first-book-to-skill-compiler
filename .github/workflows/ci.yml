@@ -26,7 +26,10 @@ jobs:
       - name: Install project without re-resolving dependencies
         run: python -m pip install -e . --no-deps
       - name: Test
-        run: python -m pytest -q
+        run: python -m pytest -q --junitxml=.ci-test-results.xml
+      - name: Report test failures
+        if: failure()
+        run: python scripts/ci_report_pytest.py .ci-test-results.xml
       - name: Lint
         run: python -m ruff check src tests scripts
       - name: Type check
@@ -84,4 +87,48 @@ jobs:
       # 85% is below the current 88% baseline and prevents silent regression
       # without turning this first gate into a large historical cleanup.
       - name: Test with coverage gate
-        run: python -m pytest -q --cov=book2skill --cov-report=term --cov-fail-under=85
+        run: python -m pytest -q --junitxml=.ci-test-results.xml --cov=book2skill --cov-report=term --cov-fail-under=85
+      - name: Report test failures
+        if: failure()
+        run: python scripts/ci_report_pytest.py .ci-test-results.xml
+
+  external-validation:
+    name: external Skill validators (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install locked core and validator reference package
+        run: |
+          python -m pip install -r requirements-lock.txt
+          python -m pip install -e . --no-deps skills-ref==0.1.0
+      - name: Install skill-validator v1.5.6
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="skill-validator_1.5.6_linux_amd64.tar.gz"
+          base="https://github.com/agent-ecosystem/skill-validator/releases/download/v1.5.6"
+          curl -fsSL "$base/$archive" -o "$RUNNER_TEMP/$archive"
+          curl -fsSL "$base/skill-validator_1.5.6_checksums.txt" -o "$RUNNER_TEMP/checksums.txt"
+          (cd "$RUNNER_TEMP" && grep "  $archive$" checksums.txt | sha256sum -c -)
+          mkdir -p "$RUNNER_TEMP/skill-validator-bin"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/skill-validator-bin"
+          echo "$RUNNER_TEMP/skill-validator-bin" >> "$GITHUB_PATH"
+      - name: Build deterministic validation Skill
+        run: >-
+          python -m book2skill.cli build examples/offline-smoke/input.txt
+          --name offline-smoke
+          --description "A deterministic offline validation Skill for CI checks"
+          --use-when "When validating local Book2Skill output"
+          --llm mock
+          --output-dir "$RUNNER_TEMP/offline-smoke"
+          --bundle-dir "$RUNNER_TEMP/bundles"
+          --data-home "$RUNNER_TEMP/workspace"
+          --rights-note "Repository-owned smoke fixture"
+          --json
+      - name: Run version-locked external validators
+        run: >-
+          python -m book2skill.cli compatibility "$RUNNER_TEMP/offline-smoke"
+          --profile portable-release --run-external --write --json

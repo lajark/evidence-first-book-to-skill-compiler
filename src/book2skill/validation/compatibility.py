@@ -101,8 +101,11 @@ def default_external_tools() -> tuple[ExternalToolConfig, ...]:
         ExternalToolConfig(
             tool_id="agent-skills-reference",
             expected_version=SKILLS_REF_VERSION,
-            command=("skills-ref", "validate", "{skill_dir}"),
-            version_command=("skills-ref", "--version"),
+            # skills-ref==0.1.0 publishes the ``agentskills`` executable.
+            # Keep the distribution name for version provenance, but invoke
+            # the actual cross-platform entry point.
+            command=("agentskills", "validate", "{skill_dir}"),
+            version_command=("agentskills", "--version"),
             distribution_name="skills-ref",
             # The upstream README explicitly says this is demonstration-only.
             blocking_in_release=False,
