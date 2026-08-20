@@ -25,7 +25,9 @@ def main() -> int:
         or testcase.find("error") is not None
     ]
     for testcase in failures:
-        failure = testcase.find("failure") or testcase.find("error")
+        failure = testcase.find("failure")
+        if failure is None:
+            failure = testcase.find("error")
         if failure is None:
             continue
         classname = testcase.attrib.get("classname", "pytest")

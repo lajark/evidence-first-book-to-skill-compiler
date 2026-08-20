@@ -129,6 +129,16 @@ jobs:
           --rights-note "Repository-owned smoke fixture"
           --json
       - name: Run version-locked external validators
-        run: >-
-          python -m book2skill.cli compatibility "$RUNNER_TEMP/offline-smoke"
-          --profile portable-release --run-external --write --json
+        shell: bash
+        run: |
+          set +e
+          python -m book2skill.cli compatibility "$RUNNER_TEMP/offline-smoke" \
+            --profile portable-release --run-external --write --json \
+            2>&1 | tee "$RUNNER_TEMP/compatibility.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            while IFS= read -r line; do
+              echo "::error title=external validator::$line"
+            done < "$RUNNER_TEMP/compatibility.log"
+            exit "$status"
+          fi
