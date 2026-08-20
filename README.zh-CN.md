@@ -83,7 +83,7 @@ uv run book2skill hello
 ### 安装已构建 wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.1-py3-none-any.whl
+python -m pip install dist\book2skill-1.0.2-py3-none-any.whl
 book2skill version
 ```
 
@@ -191,7 +191,7 @@ input/                         # 用户提供的输入文档（不提交版权�
 output/bundles/                # AnalysisBundle
 output/skills/<name>/          # 最终 Skill 目录
 output/workspace/              # Raw / Schema / 缓存 / 发布状态
-dist/book2skill-1.0.1-*.{whl,tar.gz}  # Python 交付包
+dist/book2skill-1.0.2-*.{whl,tar.gz}  # Python 交付包
 ```
 
 一个 Skill 通常包含：

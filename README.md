@@ -81,7 +81,7 @@ uv run book2skill hello
 ### Install a built wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.1-py3-none-any.whl
+python -m pip install dist\book2skill-1.0.2-py3-none-any.whl
 book2skill version
 ```
 
@@ -183,7 +183,7 @@ input/                              # user-provided documents; do not commit boo
 output/bundles/                     # AnalysisBundle files
 output/skills/<name>/               # final Skill directory
 output/workspace/                   # Raw, Schema, cache, and publish state
-dist/book2skill-1.0.1-*.{whl,tar.gz} # Python distribution artifacts
+dist/book2skill-1.0.2-*.{whl,tar.gz} # Python distribution artifacts
 ```
 
 A generated Skill normally contains:

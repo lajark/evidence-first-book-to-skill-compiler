@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.2
+
+- hardening: complete M9/M10 security, configuration, diagnostics, lifecycle,
+  documentation, and offline-smoke improvements without changing Schema v1 or
+  the public SDK compatibility contract.
+- ci: add real cross-platform Python 3.11/3.13 validation, an 85% coverage
+  gate, optional-extra checks, and failure annotations for GitHub Actions.
+- validation: run pinned `skills-ref==0.1.0` and `skill-validator==1.5.6` in
+  the portable-release profile with explicit flat-layout and Wiki-directory
+  compatibility rules.
+- runtime: preserve redacted ETA timing samples on coarse Windows clocks and
+  fall back safely when an atomic cache replacement is transiently locked.
+- host: record a real Codex CLI Skill-install-path smoke test; no claims are
+  made for Claude, Trae, or ChatGPT runtime execution.
+
 ## 1.0.1
 
 - feat(contracts): add a content-addressed `NormalizedBundle` boundary with a
