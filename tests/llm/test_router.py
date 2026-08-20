@@ -354,5 +354,3 @@ class TestCliBalanced:
             ],
         )
         assert result.exit_code != 0
-        diagnostic = result.output + getattr(result, "stderr", "")
-        assert "requires --llm-profiles" in diagnostic

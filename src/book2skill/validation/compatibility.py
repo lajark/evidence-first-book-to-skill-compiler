@@ -128,6 +128,7 @@ def default_external_tools() -> tuple[ExternalToolConfig, ...]:
                 # structure contract.
                 "--skip-orphans",
                 "--allow-flat-layouts",
+                "--allow-dirs=wiki",
                 "-o",
                 "json",
                 "{skill_dir}",
