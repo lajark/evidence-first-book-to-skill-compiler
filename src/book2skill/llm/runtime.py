@@ -750,6 +750,12 @@ class RuntimeLLMAdapter:
         *,
         operation: TimingOperation,
     ) -> None:
+        # Windows Python 3.11 runners may quantize very short monotonic
+        # intervals to zero.  Preserve the observation as a conservative
+        # lower-bound sample instead of silently dropping the ETA history.
+        duration_seconds = max(
+            duration_seconds, time.get_clock_info("monotonic").resolution
+        )
         sample = ChunkTimingSample(
             operation=operation,
             provider=self._config.provider,
