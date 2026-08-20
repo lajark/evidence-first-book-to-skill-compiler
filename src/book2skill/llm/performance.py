@@ -12,6 +12,7 @@ import json
 import os
 import statistics
 import uuid
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -92,22 +93,35 @@ class ChunkTimingHistory:
         self._samples = self._samples[-_MAX_SAMPLES:]
         if self._path is None:
             return
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
+        payload_text = json.dumps(
+            {
                 "schema_version": _SCHEMA_VERSION,
                 "samples": [asdict(item) for item in self._samples],
-            }
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        temporary: Path | None = None
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self._path.with_name(
                 f"{self._path.stem}.{uuid.uuid4().hex}.tmp"
             )
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                encoding="utf-8",
-            )
+            temporary.write_text(payload_text, encoding="utf-8")
             os.replace(temporary, self._path)
         except OSError:
-            return
+            # Some Windows runners can transiently reject replacing a freshly
+            # created file (for example while an antivirus scanner has it
+            # open).  The timing cache is best-effort, but a direct write keeps
+            # the persistent ETA history available without weakening redaction.
+            try:
+                self._path.write_text(payload_text, encoding="utf-8")
+            except OSError:
+                return
+        finally:
+            if temporary is not None:
+                with suppress(OSError):
+                    temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _load(path: Path | None) -> list[ChunkTimingSample]:

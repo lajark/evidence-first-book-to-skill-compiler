@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from book2skill.llm import performance as performance_module
 from book2skill.llm.performance import (
     ChunkTimingHistory,
     ChunkTimingSample,
@@ -52,6 +53,27 @@ def test_timing_history_persists_only_redacted_metrics(tmp_path) -> None:
         prompt_version="analysis-v1",
         response_schema_version="analysis-response-v1",
     ) == [_sample(100, 2.0)]
+
+
+def test_timing_history_falls_back_when_atomic_replace_is_locked(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "performance-history.json"
+
+    def locked_replace(_source, _target) -> None:
+        raise PermissionError
+
+    monkeypatch.setattr(
+        performance_module.os,
+        "replace",
+        locked_replace,
+    )
+
+    ChunkTimingHistory(path).append(_sample(100, 2.0))
+
+    assert json.loads(path.read_text(encoding="utf-8"))["samples"][0][
+        "input_tokens"
+    ] == 100
 
 
 def test_eta_uses_median_token_rate_and_interval() -> None:
