@@ -203,9 +203,8 @@ def test_extractor_capabilities(extractor: PdfExtractor) -> None:
 
 def test_extractor_diagnostics(extractor: PdfExtractor) -> None:
     diag = extractor.diagnostics()
-    assert "fitz" in diag
-    assert "pypdf" in diag
-    assert "pdfminer" in diag
-    assert "pdftotext" in diag
-    # At least one backend should be available in the test environment.
-    assert any(diag.values())
+    # PDF backends are optional extras; the core CI environment intentionally
+    # installs none.  The diagnostics contract must remain stable in either
+    # the core or an optional-extra environment.
+    assert set(diag) == {"fitz", "pypdf", "pdfminer", "pdftotext"}
+    assert all(isinstance(available, bool) for available in diag.values())

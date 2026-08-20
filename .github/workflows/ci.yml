@@ -142,3 +142,6 @@ jobs:
             done < "$RUNNER_TEMP/compatibility.log"
             exit "$status"
           fi
+      - name: Report external validation failures
+        if: failure()
+        run: python scripts/ci_report_compatibility.py "$RUNNER_TEMP/offline-smoke/compatibility-report.json"

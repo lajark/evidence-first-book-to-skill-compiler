@@ -272,7 +272,8 @@ class TestCli:
             ],
         )
         assert result.exit_code != 0
-        assert "--quality-authorization" in result.output
+        diagnostic = result.output + getattr(result, "stderr", "")
+        assert "--quality-authorization" in diagnostic
 
     def test_quality_requires_profiles(self, tmp_path: Path) -> None:
         from typer.testing import CliRunner
@@ -285,7 +286,8 @@ class TestCli:
             ["analyze", str(tmp_path / "x.txt"), "--quality"],
         )
         assert result.exit_code != 0
-        assert "--llm-profiles" in result.output
+        diagnostic = result.output + getattr(result, "stderr", "")
+        assert "--llm-profiles" in diagnostic
 
 
 class TestMockLLMReviewer:

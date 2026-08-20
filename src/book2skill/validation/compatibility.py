@@ -119,6 +119,15 @@ def default_external_tools() -> tuple[ExternalToolConfig, ...]:
                 "--strict",
                 "--skip",
                 "links",
+                # Build outputs retain root-level audit sidecars (for
+                # provenance, replay and quality evidence).  They are not
+                # host-loaded Skill content, so ask the external validator to
+                # treat that flat layout as intentional and skip orphan
+                # warnings for those sidecars.  Book2Skill's own validator
+                # and the reference validator still enforce the core
+                # structure contract.
+                "--skip-orphans",
+                "--allow-flat-layouts",
                 "-o",
                 "json",
                 "{skill_dir}",

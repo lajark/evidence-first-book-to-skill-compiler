@@ -210,7 +210,10 @@ def test_cli_does_not_accept_api_keys_in_process_arguments() -> None:
     result = runner.invoke(app, ["analyze", "sample.txt", "--llm-api-key", "secret"])
 
     assert result.exit_code != 0
-    assert "--llm-api-key" in result.output
+    # Click/Typer may keep parser diagnostics on stderr in CI runners while
+    # older versions mixed them into ``Result.output``.
+    diagnostic = result.output + getattr(result, "stderr", "")
+    assert "--llm-api-key" in diagnostic
 
 
 def test_cli_real_adapter_wires_data_home_cache_and_timing_history(
