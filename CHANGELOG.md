@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.3
+
+- feat(desktop): add the Windows WebGUI, PyInstaller/Inno Setup installer, and
+  isolated install/upgrade/uninstall smoke verification.
+- build(release): include the desktop dependency manifest, 71 license evidence
+  files, recursive checksums, and optional Authenticode/RFC 3161 signing.
+- docs: document the Windows packaging boundary, unsigned personal-project
+  distribution, and the current private-use license release gate.
+
 ## 1.0.2
 
 - hardening: complete M9/M10 security, configuration, diagnostics, lifecycle,

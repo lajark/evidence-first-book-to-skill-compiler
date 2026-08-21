@@ -44,6 +44,14 @@
 | [generative-computing/mellea-skills-compiler](https://github.com/generative-computing/mellea-skills-compiler) | Apache-2.0；IBM Research 2026-05 research preview，页面明确 API/CLI/产物可能变化且当前编译后端有限 | 仅参考类型 Schema、fixture、矛盾显式化和审计思想 | 不作为 v1.x 运行依赖，不建设认证治理平台 |
 | [SJTU-IPADS/SkVM](https://github.com/SJTU-IPADS/SkVM) | MIT；提供 Profiling、AOT、JIT 和跨模型/harness benchmark | 远期兼容矩阵和 runtime benchmark 观察项 | 不引入运行时、子模块、二进制下载或 AOT/JIT 依赖 |
 
+### 本次本地参考项目：T-Stocks
+
+本次 Windows 桌面增量参考了用户提供的 `T-Stocks` 本地项目：采用
+`pywebview + localhost HTTP/SSE` 的本地 WebGUI 形态，并借鉴
+`PyInstaller onedir + Inno Setup` 的 Windows 构建链。Book2Skill 只吸收交互与
+打包思路，不复制其业务代码；任务仍由 Book2Skill 现有 Application Use Case
+执行，并保留本地令牌、脱敏、许可证和可选依赖审查边界。macOS 桌面构建不在本次范围内。
+
 ## 4. 目标边界
 
 ### 4.1 校验分层

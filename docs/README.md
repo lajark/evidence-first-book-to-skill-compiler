@@ -7,6 +7,7 @@
 - [LLM 配置与限流](LLM_CONFIG.md)
 - [顶层配置契约](CONFIG.md)
 - [离线最小示例](../examples/offline-smoke/README.md)
+- [Windows Desktop WebGUI 与安装包](DESKTOP_WINDOWS.md)
 
 架构与集成：
 

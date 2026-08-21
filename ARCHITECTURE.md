@@ -5,7 +5,9 @@
 采用 Ports & Adapters + 编译器管线：输入适配器把异构文档转换为统一 Raw/ExtractionMap；Schema/Skill IR 保存稳定语义；宿主 Adapter 只处理安装路径、frontmatter 扩展和调用方式。
 
 ```text
-CLI / Meta Skill
+CLI / Meta Skill / Windows WebGUI
+      ↓
+Presentation Adapters (Typer / localhost API / pywebview)
       ↓
 Application Use Cases
       ↓
@@ -27,6 +29,7 @@ book2skill/
 │   ├── compiler/
 │   ├── validation/
 │   ├── hosts/
+│   ├── desktop/              # optional Windows WebGUI; no business rules
 │   └── cli.py
 ├── skills/book2skill/
 │   ├── SKILL.md
@@ -59,3 +62,6 @@ book2skill/
 - 原始文件不修改；“删除”只标记来源不可用，不擦除历史。
 - SQLite 不是 P0 必需；所有状态可由版本化文件重建。
 - 模型仅产生候选结构，验证器和人工审核决定是否发布。
+- Windows WebGUI 只能通过 Application Use Case 工作；其 localhost API 只负责
+  会话、任务状态、进度和脱敏结果，不形成第二套领域模型。
+- 桌面程序目录与用户数据目录分离；安装器不触碰 Raw 原件、工作区历史或凭据。

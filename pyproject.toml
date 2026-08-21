@@ -41,6 +41,22 @@ mobi = []  # Calibre CLI is used externally; no PyPI dependency
 docling = ["docling>=2.25,<3"]  # optional layout-aware PDF backend (heavy)
 ocr = ["pillow>=10.3,<11"]
 llm = ["openai>=1.30,<2"]
+desktop = [
+    "pywebview>=5.1,<6",
+]
+# Safe standard desktop profile.  It intentionally omits PyMuPDF (AGPL or
+# commercial terms) until the external-distribution license decision is made.
+desktop-safe = [
+    "pywebview>=5.1,<6",
+    "pypdf>=4.0,<5",
+    "pdfminer.six>=20231228",
+    "beautifulsoup4>=4.12,<5",
+    "python-docx>=1.1,<2",
+    "openai>=1.30,<2",
+]
+build-windows = [
+    "pyinstaller>=6.10,<7",
+]
 dev = [
     "pytest>=8.2,<9",
     "pytest-cov>=5.0,<6",
@@ -52,6 +68,7 @@ dev = [
 
 [project.scripts]
 book2skill = "book2skill.cli:app"
+book2skill-desktop = "book2skill.desktop.app:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -156,6 +173,7 @@ module = [
     "bs4.*",
     "jsonschema",
     "openai",
+    "webview",
 ]
 ignore_missing_imports = true
 

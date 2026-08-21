@@ -1,6 +1,6 @@
 # 分发与可见性政策（Distribution Policy）
 
-- 文档版本：v1.0.1
+- 文档版本：v1.1.0
 - 原则：**最小范围公开**。仓库推送到公开远端（GitHub）的文件只包含对外有交付价值的公开内容；开发过程文件留在本机 `.workspace/` 或由 `.gitignore` 排除；隐私与密钥类文件严禁进入任何远端历史。本文件是后续项目可继承的分发策略模板根。
 
 > 本政策与 `AGENTS.md`、`.gitignore`、`scripts/pre_push_scan.py` 协同生效。判断文件归属时，以本文件的三类矩阵为准；`pre_push_scan.py` 是执行层守门工具，CI 与 pre-push hook 会强制运行。
@@ -22,7 +22,8 @@
 | CI | `.github/` |
 | 顶层文档 | `README*.md`、`CHANGELOG.md`、`LICENSE`、`ARCHITECTURE.md`、`DATA_MODEL.md`、`EXTENSION_SDK.md`、`FORMAT_ADAPTERS.md`、`OPEN_SOURCE_REUSE_POLICY.md`、`SECURITY.md`、`SKILL_AUTHORING_STANDARD.md`、`SKILL_DEPLOYMENT.md`、`TRACEABILITY_MATRIX.md`、`RELEASE_PACKAGE_SPEC.md`、`DISTRIBUTION_POLICY.md` |
 | 构建/配置 | `pyproject.toml`、`requirements-lock.txt`、`.env.example`、`llm-profiles.example.yaml`、`config.example.yaml` |
-| 公开工具脚本 | `scripts/acceptance_metrics.py`、`scripts/bootstrap_self.py`、`scripts/build_release.py`、`scripts/check_provenance.py`、`scripts/install.sh`、`scripts/pre_push_scan.py`、`scripts/run_acceptance.py` |
+| 公开工具脚本 | `scripts/acceptance_metrics.py`、`scripts/bootstrap_self.py`、`scripts/build_release.py`、`scripts/build_windows.ps1`、`scripts/check_provenance.py`、`scripts/generate_desktop_dependency_manifest.py`、`scripts/generate_desktop_release.py`、`scripts/sign_windows_release.ps1`、`scripts/verify_windows_installer.ps1`、`scripts/install.sh`、`scripts/pre_push_scan.py`、`scripts/run_acceptance.py` |
+| Windows 桌面构建配置 | `packaging/windows/`、`docs/DESKTOP_WINDOWS.md` |
 
 **机制判定**：凡 wheel / 官方发布包（`book2skill-core-<version>.zip`）所依赖或引用的文件，一律归公开类。例如 `src/book2skill/llm/benchmark_slots.py`（wheel 打包、被 `quality.py` 的 `benchmark_gap` 使用）、`schemas/`、`templates/`。
 
@@ -47,7 +48,7 @@
 | 类别 | 路径/模式 |
 |---|---|
 | 密钥/凭据 | `.env`、`.env.*`、`secrets/`、`*.pem`、`*.key`、`ssh-key`、`ssh-key.pub`、`config.local.*`、`llm-profiles.local.yaml` |
-| 运行数据 | `workspace/`、`.workspace/` 数据、`output/`、`dist/`、`htmlcov/`、`.coverage` |
+| 运行数据 | `workspace/`、`.workspace/` 数据、`output/`、`dist/`、`htmlcov/`、`.coverage`（构建配置与发布元数据脚本本身除外） |
 | 版权材料 | `library/raw/`、`library/books/`、真实电子书 `*.pdf`、`*.epub`、`*.mobi`、`*.azw*` |
 | 规格包 | `*.zip`（原始开发规格包） |
 
@@ -62,6 +63,8 @@
 ## 3. 执行守门
 
 - 推送前运行 `python scripts/pre_push_scan.py --untracked`，确认无 `process-internal` / `sensitive` 命中。
+- Windows 安装器即使生成于 `dist/installer/`，也必须经过许可证、依赖通知、签名状态和
+  `release-manifest.json` 审查；当前私有许可证下只能作为内部预览。
 - CI 的 `policy-scan` job 强制同一检查，防止绕过。
 - 对已跟踪的内部文件，先 `git rm --cached`（保留本地）再纳入 `.gitignore`；仅修改 `.gitignore` 不会移除已跟踪文件。
 - 若密钥或真实版权材料已进入历史：轮换密钥、暂停共享，再用 `git filter-repo` 类工具清理历史并重新核验，不得只删除最新版本。

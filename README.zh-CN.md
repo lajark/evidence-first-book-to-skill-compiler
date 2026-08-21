@@ -6,7 +6,7 @@ Book2Skill 将用户合法持有的 PDF、EPUB、DOCX、MOBI/AZW、TXT、Markdow
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1026%20passed%20%2F%201%20skipped-brightgreen.svg)](#测试与质量)
+[![Tests](https://img.shields.io/badge/tests-1057%20passed%20%2F%205%20skipped-brightgreen.svg)](#测试与质量)
 
 ## 这是什么
 
@@ -45,9 +45,19 @@ Book2Skill 是一个本地优先的文档知识编译器。它把一次性阅读
 ### 系统要求
 
 - Python 3.11 或更高版本（推荐 3.13）
-- Windows、macOS 或 Linux
+- Windows、macOS 或 Linux（本次新增的桌面安装包仅面向 Windows）
 - `pip` 或 `uv`
 - MOBI/AZW 需要可选的 Calibre `ebook-convert`；扫描 PDF 的 OCR 需要 Tesseract
+
+Windows 日常使用也可安装本地 WebGUI：
+
+```powershell
+python -m pip install -e ".[desktop-safe]"
+book2skill-desktop
+```
+
+桌面安装包、目录、安全边界和构建方式见
+[docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md)。本次不提供 macOS 桌面安装包。
 
 ### 从源码安装（推荐开发和本地使用）
 
@@ -83,7 +93,7 @@ uv run book2skill hello
 ### 安装已构建 wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.2-py3-none-any.whl
+python -m pip install dist\book2skill-1.0.3-py3-none-any.whl
 book2skill version
 ```
 
@@ -191,7 +201,7 @@ input/                         # 用户提供的输入文档（不提交版权�
 output/bundles/                # AnalysisBundle
 output/skills/<name>/          # 最终 Skill 目录
 output/workspace/              # Raw / Schema / 缓存 / 发布状态
-dist/book2skill-1.0.2-*.{whl,tar.gz}  # Python 交付包
+dist/book2skill-1.0.3-*.{whl,tar.gz}  # Python 交付包
 ```
 
 一个 Skill 通常包含：
@@ -231,7 +241,7 @@ compatibility-report.{md,json} # 规范、工具和宿主分层证据
 .venv/Scripts/python -m hatchling build
 ```
 
-当前本地验证：**1026 passed / 1 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。测试中的一个 skipped 项为可选外部工具场景。
+当前本地验证：**1057 passed / 5 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。skipped 项为可选外部工具或平台场景。
 
 ## 文档
 

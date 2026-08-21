@@ -6,7 +6,7 @@ Book2Skill compiles legally usable PDF, EPUB, DOCX, MOBI/AZW, TXT, Markdown, HTM
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1026%20passed%20%2F%201%20skipped-brightgreen.svg)](#testing-and-quality)
+[![Tests](https://img.shields.io/badge/tests-1057%20passed%20%2F%205%20skipped-brightgreen.svg)](#testing-and-quality)
 
 ## What it is
 
@@ -43,9 +43,19 @@ The distinction is scope, not a quality judgment: upstream is strong at “extra
 ### Requirements
 
 - Python 3.11+ (3.13 recommended)
-- Windows, macOS, or Linux
+- Windows, macOS, or Linux (the new desktop installer in this update is Windows-only)
 - `pip` or `uv`
 - Optional: Calibre `ebook-convert` for MOBI/AZW; Tesseract for scanned-PDF OCR
+
+For daily Windows use, install the optional local WebGUI:
+
+```powershell
+python -m pip install -e ".[desktop-safe]"
+book2skill-desktop
+```
+
+See [docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md) for the desktop installer,
+security boundary, and build instructions. This update does not ship a macOS desktop installer.
 
 ### Install from source
 
@@ -81,7 +91,7 @@ uv run book2skill hello
 ### Install a built wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.2-py3-none-any.whl
+python -m pip install dist\book2skill-1.0.3-py3-none-any.whl
 book2skill version
 ```
 
@@ -183,7 +193,7 @@ input/                              # user-provided documents; do not commit boo
 output/bundles/                     # AnalysisBundle files
 output/skills/<name>/               # final Skill directory
 output/workspace/                   # Raw, Schema, cache, and publish state
-dist/book2skill-1.0.2-*.{whl,tar.gz} # Python distribution artifacts
+dist/book2skill-1.0.3-*.{whl,tar.gz} # Python distribution artifacts
 ```
 
 A generated Skill normally contains:
@@ -223,7 +233,7 @@ The project does not bypass DRM, download pirated material, require a specific m
 .venv/Scripts/python -m hatchling build
 ```
 
-Latest local verification: **1026 passed / 1 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped test covers an optional external tool.
+Latest local verification: **1057 passed / 5 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped tests cover optional external-tool or platform scenarios.
 
 ## Documentation
 

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Book2Skill</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="brand">Book2Skill</div>
+      <div class="subtitle" id="version">本地文档知识编译器</div>
+    </div>
+    <div class="status-pill" id="connection">连接中…</div>
+  </header>
+
+  <main class="layout">
+    <section class="card workflow-card">
+      <div class="section-head">
+        <div>
+          <h1>开始一次转换</h1>
+          <p>源文件只在本机处理；云端模型需显式选择并自行承担数据边界。</p>
+        </div>
+        <button class="secondary" id="pick-files" type="button">选择文件</button>
+      </div>
+
+      <label class="field">
+        <span>工作流</span>
+        <select id="mode">
+          <option value="analyze">Analyze：生成可审核 AnalysisBundle</option>
+          <option value="build">Build：生成可部署 Skill</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>源文件路径（每行一个）</span>
+        <textarea id="sources" rows="5" placeholder="C:\\Books\\example.pdf"></textarea>
+      </label>
+
+      <label class="field">
+        <span>合法性/使用权确认（必填）</span>
+        <input id="rights-note" type="text" placeholder="例如：本人拥有该文件的处理权，仅用于个人知识整理">
+      </label>
+
+      <div class="grid two" id="skill-fields" hidden>
+        <label class="field"><span>Skill 名称</span><input id="skill-name" value="my-book-skill"></label>
+        <label class="field"><span>Skill 描述</span><input id="skill-description" value="A source-traceable skill generated from my document."></label>
+        <label class="field wide"><span>何时使用（每行一个）</span><textarea id="use-when" rows="3">当问题与该文档主题相关时。</textarea></label>
+        <label class="field wide"><span>何时不使用（每行一个，可空）</span><textarea id="do-not-use-when" rows="2"></textarea></label>
+      </div>
+
+      <div class="grid three">
+        <label class="field"><span>模型模式</span>
+          <select id="llm"><option value="mock">Mock（离线）</option><option value="compatible">OpenAI-compatible</option></select>
+        </label>
+        <label class="field"><span>模型名（可选）</span><input id="llm-model" placeholder="由 profile 或环境变量提供"></label>
+        <label class="field"><span>Base URL（可选）</span><input id="llm-base-url" placeholder="https://…/v1"></label>
+      </div>
+
+      <div class="action-row">
+        <button class="primary" id="run" type="button">开始</button>
+        <button class="danger" id="cancel" type="button" disabled>取消任务</button>
+        <span class="hint" id="action-hint"></span>
+      </div>
+    </section>
+
+    <aside class="card progress-card">
+      <div class="section-head"><h2>运行状态</h2><span id="job-kind">空闲</span></div>
+      <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+      <div class="progress-meta"><span id="progress-value">0%</span><span id="progress-stage">等待开始</span><span id="progress-eta">ETA —</span></div>
+      <pre class="event-log" id="event-log" aria-live="polite"></pre>
+    </aside>
+
+    <section class="card result-card">
+      <div class="section-head"><h2>结果</h2><button class="secondary" id="copy-result" type="button">复制摘要</button></div>
+      <pre class="result" id="result" aria-live="polite">尚未运行任务。</pre>
+      <div class="install-row">
+        <label class="field compact"><span>宿主安装预览</span>
+          <select id="install-host">
+            <option value="project">当前项目（project）</option>
+            <option value="claude">Claude</option>
+            <option value="trae">Trae</option>
+            <option value="codex">Codex</option>
+            <option value="chatgpt">ChatGPT</option>
+          </select>
+        </label>
+        <button class="secondary" id="install-dry-run" type="button" disabled>预览安装动作</button>
+      </div>
+    </section>
+
+    <section class="card info-card">
+      <h2>运行目录</h2>
+      <dl>
+        <dt>数据根目录</dt><dd id="root-path">—</dd>
+        <dt>AnalysisBundle</dt><dd id="bundle-path">—</dd>
+        <dt>Skill 输出</dt><dd id="skill-path">—</dd>
+      </dl>
+      <p class="small">Calibre、Tesseract 和 Docling 不随标准 Windows 安装包自动安装；缺少时会给出降级诊断。</p>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
