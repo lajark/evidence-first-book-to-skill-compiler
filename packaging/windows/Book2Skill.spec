@@ -14,6 +14,8 @@ datas = [
     (str(PROJECT_ROOT / "schemas"), "book2skill/_resources/schemas"),
     (str(PROJECT_ROOT / "templates" / "generated-skill"), "book2skill/_resources/templates/generated-skill"),
     (str(PROJECT_ROOT / "README.md"), "."),
+    (str(PROJECT_ROOT / "docs" / "DESKTOP_GUIDE.md"), "."),
+    (str(PROJECT_ROOT / "docs" / "DESKTOP_WINDOWS.md"), "."),
     (str(PROJECT_ROOT / "LICENSE"), "."),
     (str(PROJECT_ROOT / "THIRD_PARTY_NOTICES.md"), "."),
 ] + webview_datas

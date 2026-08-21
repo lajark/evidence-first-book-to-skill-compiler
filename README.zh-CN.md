@@ -56,7 +56,8 @@ python -m pip install -e ".[desktop-safe]"
 book2skill-desktop
 ```
 
-桌面安装包、目录、安全边界和构建方式见
+安装、配置、日常使用和宿主边界见
+[docs/DESKTOP_GUIDE.md](docs/DESKTOP_GUIDE.md)；安装器、目录、安全边界和构建方式见
 [docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md)。本次不提供 macOS 桌面安装包。
 
 ### 从源码安装（推荐开发和本地使用）
@@ -93,7 +94,7 @@ uv run book2skill hello
 ### 安装已构建 wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.3-py3-none-any.whl
+python -m pip install dist\book2skill-1.0.4-py3-none-any.whl
 book2skill version
 ```
 
@@ -201,7 +202,7 @@ input/                         # 用户提供的输入文档（不提交版权�
 output/bundles/                # AnalysisBundle
 output/skills/<name>/          # 最终 Skill 目录
 output/workspace/              # Raw / Schema / 缓存 / 发布状态
-dist/book2skill-1.0.3-*.{whl,tar.gz}  # Python 交付包
+dist/book2skill-1.0.4-*.{whl,tar.gz}  # Python 交付包
 ```
 
 一个 Skill 通常包含：
@@ -241,7 +242,7 @@ compatibility-report.{md,json} # 规范、工具和宿主分层证据
 .venv/Scripts/python -m hatchling build
 ```
 
-当前本地验证：**1057 passed / 5 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。skipped 项为可选外部工具或平台场景。
+当前本地验证：**1060 passed / 5 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。skipped 项为可选外部工具或平台场景。
 
 ## 文档
 

@@ -2,6 +2,9 @@
 
 本功能是 Book2Skill CLI 的可选本地桌面壳，不改变核心管线和 Core ZIP 交付方式。
 
+面向日常使用的完整说明见 [DESKTOP_GUIDE.md](DESKTOP_GUIDE.md)，包括安装、配置、
+功能分区、使用步骤、`.env` 位置和宿主适配边界。
+
 ## 运行
 
 开发环境安装安全桌面依赖：
@@ -22,6 +25,13 @@ book2skill-desktop
 
 可用 `BOOK2SKILL_HOME` 指向便携式目录。GUI 默认 Mock 离线模式；云端模型仍需显式
 选择，并沿用 CLI 的 profile/环境变量优先级。
+
+桌面版默认显式读取 `%LOCALAPPDATA%\Book2Skill\.env` 和同目录的
+`llm-profiles.local.yaml`；设置 `BOOK2SKILL_HOME` 后改为读取该目录。Core/CLI
+实例仍从当前工作目录向上查找 `.env`，两种部署形态互不覆盖配置。
+
+桌面 WebGUI 的“功能”和“配置”分为独立标签页；宿主适配只负责生成安装预览和目标
+目录动作，Book2Skill 本身不依赖或自动安装 Codex、TRAE、Claude、ChatGPT 等宿主。
 
 ## 安全边界
 

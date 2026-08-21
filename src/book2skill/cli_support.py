@@ -26,6 +26,7 @@ def build_llm_adapter(
     llm_profile: str | None = None,
     llm_strategy: str = "single",
     locale: Locale = "zh-CN",
+    env_file_path: str | Path | None = None,
 ) -> LLMAdapter:
     """Resolve and build the shared, auditable LLM adapter.
 
@@ -45,7 +46,7 @@ def build_llm_adapter(
     )
     from book2skill.llm.runtime import build_llm_adapter as build_runtime_adapter
 
-    env_file = load_env_file()
+    env_file = load_env_file(env_file_path) if env_file_path else load_env_file()
     if llm_strategy == "balanced":
         if not llm_profiles:
             raise typer.BadParameter(

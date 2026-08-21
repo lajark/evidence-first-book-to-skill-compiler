@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import sys
 from pathlib import Path
 
 from book2skill.desktop.server import DesktopWebServer
@@ -34,7 +35,27 @@ class NativeApi:
 
 
 def _static_dir() -> Path:
-    return Path(__file__).with_name("static")
+    """Resolve bundled WebGUI assets in source and frozen layouts.
+
+    PyInstaller does not guarantee that a frozen module's ``__file__`` points
+    at a materialised source file.  In that layout the asset directory lives
+    below ``sys._MEIPASS`` (or the onedir ``_internal`` directory), so using
+    only ``Path(__file__).with_name`` can silently give the HTTP server a
+    non-existent directory and render a blank window.
+    """
+
+    candidates = [Path(__file__).with_name("static")]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "book2skill" / "desktop" / "static")
+    executable_dir = Path(sys.executable).resolve().parent
+    candidates.append(
+        executable_dir / "_internal" / "book2skill" / "desktop" / "static"
+    )
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
 
 
 def main() -> None:

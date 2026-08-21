@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.4
+
+- 修复 PyInstaller 桌面包的 WebGUI 静态资源定位，避免窗口页面空白。
+- 参考 StockAnalysis 增加“功能 / 配置 / 帮助”分区，补齐安装、配置、使用和宿主边界说明。
+- 桌面版显式支持用户数据根目录中的 `.env` 与 `llm-profiles.local.yaml`，保持宿主无关。
+
 ## 1.0.3
 
 - feat(desktop): add the Windows WebGUI, PyInstaller/Inno Setup installer, and

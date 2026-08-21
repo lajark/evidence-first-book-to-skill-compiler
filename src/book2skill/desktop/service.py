@@ -86,6 +86,8 @@ class DesktopApplicationService:
                 "root": str(self.root),
                 "bundles": str(self.bundle_dir),
                 "skills": str(self.skill_dir),
+                "env_file": str(self.root / ".env"),
+                "profiles_file": str(self.root / "llm-profiles.local.yaml"),
             },
             "job": self.manager.status(),
         }
@@ -232,6 +234,12 @@ class DesktopApplicationService:
 
     def _llm(self, payload: dict[str, object], data_home: Path) -> Any:
         kind = self._optional_text(payload, "llm") or "mock"
+        env_file = self.root / ".env"
+        profiles_file = self._optional_text(payload, "llm_profiles")
+        if not profiles_file:
+            candidate = self.root / "llm-profiles.local.yaml"
+            if candidate.is_file():
+                profiles_file = str(candidate)
         try:
             return build_llm_adapter(
                 kind,
@@ -239,10 +247,11 @@ class DesktopApplicationService:
                 base_url=self._optional_text(payload, "llm_base_url"),
                 allow_fallback=bool(payload.get("allow_llm_fallback", False)),
                 data_home=data_home,
-                llm_profiles=self._optional_text(payload, "llm_profiles"),
+                llm_profiles=profiles_file,
                 llm_profile=self._optional_text(payload, "llm_profile"),
                 llm_strategy=self._optional_text(payload, "llm_strategy") or "single",
                 locale="zh-CN",
+                env_file_path=env_file if env_file.is_file() else None,
             )
         except Exception as exc:  # noqa: BLE001 - adapter boundary
             raise DesktopRequestError(str(exc)) from exc

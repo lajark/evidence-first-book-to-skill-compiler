@@ -1,103 +1,192 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
   <title>Book2Skill</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <div class="brand">Book2Skill</div>
-      <div class="subtitle" id="version">本地文档知识编译器</div>
+  <header class="appbar glass">
+    <div class="brand">
+      <div class="brand-title">Book2Skill</div>
+      <div class="brand-sub" id="version">本地文档知识编译器</div>
     </div>
-    <div class="status-pill" id="connection">连接中…</div>
+    <nav class="tabs" aria-label="主导航">
+      <button class="tab active" data-page="function">功能</button>
+      <button class="tab" data-page="settings">配置</button>
+      <button class="tab" data-page="help">帮助</button>
+    </nav>
+    <div class="appbar-actions">
+      <div class="seg" role="group" aria-label="主题">
+        <button class="seg-btn" data-theme-set="light" title="浅色">浅</button>
+        <button class="seg-btn active" data-theme-set="dark" title="深色">深</button>
+      </div>
+      <div class="seg" role="group" aria-label="字号">
+        <button class="seg-btn" id="font-minus" title="减小字号">A-</button>
+        <button class="seg-btn" id="font-plus" title="增大字号">A+</button>
+      </div>
+      <span class="meta" id="font-label">15px</span>
+      <span class="meta status-ok" id="connection">连接中…</span>
+    </div>
   </header>
 
-  <main class="layout">
-    <section class="card workflow-card">
-      <div class="section-head">
-        <div>
-          <h1>开始一次转换</h1>
-          <p>源文件只在本机处理；云端模型需显式选择并自行承担数据边界。</p>
-        </div>
-        <button class="secondary" id="pick-files" type="button">选择文件</button>
-      </div>
+  <main class="content">
+    <section class="page active" id="page-function">
+      <div class="grid bento">
+        <section class="glass card workflow-card">
+          <div class="card-head">
+            <div>
+              <h1 class="card-title">生成可审核、可部署的 Skill</h1>
+              <p class="card-description">选择合法持有的文档，离线完成分析或构建；云端模型必须在“配置”中显式启用。</p>
+            </div>
+            <span class="step-badge">功能</span>
+          </div>
 
-      <label class="field">
-        <span>工作流</span>
-        <select id="mode">
-          <option value="analyze">Analyze：生成可审核 AnalysisBundle</option>
-          <option value="build">Build：生成可部署 Skill</option>
-        </select>
-      </label>
+          <label class="field">
+            <span class="label">工作流</span>
+            <select id="mode" class="input">
+              <option value="analyze">Analyze：生成可审核 AnalysisBundle</option>
+              <option value="build">Build：生成可部署 Skill</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="label">源文件路径（每行一个）</span>
+            <textarea id="sources" class="input" rows="5" placeholder="选择文件，或填写 C:\\Books\\example.pdf"></textarea>
+          </label>
+          <button class="btn ghost" id="pick-files" type="button">选择文件</button>
+          <label class="field">
+            <span class="label">合法性 / 使用权确认（必填）</span>
+            <input id="rights-note" class="input" type="text" placeholder="例如：本人拥有该文件的处理权，仅用于个人知识整理">
+          </label>
 
-      <label class="field">
-        <span>源文件路径（每行一个）</span>
-        <textarea id="sources" rows="5" placeholder="C:\\Books\\example.pdf"></textarea>
-      </label>
+          <div class="grid two" id="skill-fields" hidden>
+            <label class="field"><span class="label">Skill 名称</span><input id="skill-name" class="input" value="my-book-skill"></label>
+            <label class="field"><span class="label">Skill 描述</span><input id="skill-description" class="input" value="A source-traceable skill generated from my document."></label>
+            <label class="field wide"><span class="label">何时使用（每行一个）</span><textarea id="use-when" class="input" rows="3">当问题与该文档主题相关时。</textarea></label>
+            <label class="field wide"><span class="label">何时不使用（每行一个，可空）</span><textarea id="do-not-use-when" class="input" rows="2"></textarea></label>
+          </div>
 
-      <label class="field">
-        <span>合法性/使用权确认（必填）</span>
-        <input id="rights-note" type="text" placeholder="例如：本人拥有该文件的处理权，仅用于个人知识整理">
-      </label>
+          <div class="config-summary" id="config-summary">当前配置：Mock 离线模式</div>
+          <div class="btn-row">
+            <button class="btn primary" id="run" type="button">开始</button>
+            <button class="btn danger" id="cancel" type="button" disabled>取消任务</button>
+            <span class="status" id="action-hint"></span>
+          </div>
+        </section>
 
-      <div class="grid two" id="skill-fields" hidden>
-        <label class="field"><span>Skill 名称</span><input id="skill-name" value="my-book-skill"></label>
-        <label class="field"><span>Skill 描述</span><input id="skill-description" value="A source-traceable skill generated from my document."></label>
-        <label class="field wide"><span>何时使用（每行一个）</span><textarea id="use-when" rows="3">当问题与该文档主题相关时。</textarea></label>
-        <label class="field wide"><span>何时不使用（每行一个，可空）</span><textarea id="do-not-use-when" rows="2"></textarea></label>
-      </div>
+        <section class="glass card progress-card">
+          <div class="card-head"><h2 class="card-title">运行状态</h2><span class="meta" id="job-kind">空闲</span></div>
+          <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+          <div class="progress-meta"><span id="progress-value">0%</span><span id="progress-stage">等待开始</span><span id="progress-eta">ETA —</span></div>
+          <pre class="event-log" id="event-log" aria-live="polite">等待任务。</pre>
+        </section>
 
-      <div class="grid three">
-        <label class="field"><span>模型模式</span>
-          <select id="llm"><option value="mock">Mock（离线）</option><option value="compatible">OpenAI-compatible</option></select>
-        </label>
-        <label class="field"><span>模型名（可选）</span><input id="llm-model" placeholder="由 profile 或环境变量提供"></label>
-        <label class="field"><span>Base URL（可选）</span><input id="llm-base-url" placeholder="https://…/v1"></label>
-      </div>
+        <section class="glass card result-card">
+          <div class="card-head">
+            <div><h2 class="card-title">结果与宿主适配</h2><p class="card-description">Skill 内容保持宿主无关；下方仅预览安装目标，不会自动安装 Codex、TRAE 或其他宿主。</p></div>
+            <button class="btn ghost" id="copy-result" type="button">复制摘要</button>
+          </div>
+          <pre class="result" id="result" aria-live="polite">尚未运行任务。</pre>
+          <div class="install-row">
+            <label class="field compact"><span class="label">安装预览目标</span>
+              <select id="install-host" class="input">
+                <option value="project">当前项目（project）</option>
+                <option value="claude">Claude</option>
+                <option value="trae">TRAE</option>
+                <option value="codex">Codex</option>
+                <option value="chatgpt">ChatGPT</option>
+              </select>
+            </label>
+            <button class="btn ghost" id="install-dry-run" type="button" disabled>预览安装动作</button>
+          </div>
+        </section>
 
-      <div class="action-row">
-        <button class="primary" id="run" type="button">开始</button>
-        <button class="danger" id="cancel" type="button" disabled>取消任务</button>
-        <span class="hint" id="action-hint"></span>
+        <section class="glass card info-card">
+          <h2 class="card-title">本地运行目录</h2>
+          <dl>
+            <dt>数据根目录</dt><dd id="root-path">—</dd>
+            <dt>AnalysisBundle</dt><dd id="bundle-path">—</dd>
+            <dt>Skill 输出</dt><dd id="skill-path">—</dd>
+          </dl>
+          <p class="small">标准安装包不自动安装 Calibre、Tesseract 或 Docling；缺少可选工具时会给出降级诊断。</p>
+        </section>
       </div>
     </section>
 
-    <aside class="card progress-card">
-      <div class="section-head"><h2>运行状态</h2><span id="job-kind">空闲</span></div>
-      <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
-      <div class="progress-meta"><span id="progress-value">0%</span><span id="progress-stage">等待开始</span><span id="progress-eta">ETA —</span></div>
-      <pre class="event-log" id="event-log" aria-live="polite"></pre>
-    </aside>
+    <section class="page" id="page-settings">
+      <div class="grid settings-grid">
+        <section class="glass card">
+          <div class="card-head"><div><h1 class="card-title">模型与运行配置</h1><p class="card-description">配置只影响本机任务；API Key 不在此页面输入，仍从环境变量或 `.env` 读取。</p></div><span class="step-badge">配置</span></div>
+          <label class="field"><span class="label">模型模式</span>
+            <select id="llm" class="input"><option value="mock">Mock（离线，推荐首次使用）</option><option value="compatible">OpenAI-compatible（需显式联网）</option></select>
+          </label>
+          <label class="field"><span class="label">模型名（可选）</span><input id="llm-model" class="input" placeholder="由 profile 或环境变量提供"></label>
+          <label class="field"><span class="label">Base URL（可选）</span><input id="llm-base-url" class="input" placeholder="https://…/v1"></label>
+          <label class="field"><span class="label">Profile 文件（可选）</span><input id="llm-profiles" class="input" placeholder="默认读取数据根目录的 llm-profiles.local.yaml"></label>
+          <label class="field"><span class="label">Profile ID（可选）</span><input id="llm-profile" class="input" placeholder="例如 default"></label>
+          <label class="field"><span class="label">Profile 路由</span>
+            <select id="llm-strategy" class="input"><option value="single">single：单一 profile</option><option value="balanced">balanced：按配置路由</option></select>
+          </label>
+          <div class="btn-row"><button class="btn primary" id="save-config" type="button">保存本机配置</button><span class="status" id="config-status">尚未保存</span></div>
+        </section>
 
-    <section class="card result-card">
-      <div class="section-head"><h2>结果</h2><button class="secondary" id="copy-result" type="button">复制摘要</button></div>
-      <pre class="result" id="result" aria-live="polite">尚未运行任务。</pre>
-      <div class="install-row">
-        <label class="field compact"><span>宿主安装预览</span>
-          <select id="install-host">
-            <option value="project">当前项目（project）</option>
-            <option value="claude">Claude</option>
-            <option value="trae">Trae</option>
-            <option value="codex">Codex</option>
-            <option value="chatgpt">ChatGPT</option>
-          </select>
-        </label>
-        <button class="secondary" id="install-dry-run" type="button" disabled>预览安装动作</button>
+        <section class="glass card">
+          <h2 class="card-title">配置文件位置</h2>
+          <p class="card-description">桌面版使用独立用户数据根目录；不会读取旧项目目录中的密钥，除非你把配置迁移到这里。</p>
+          <dl class="path-list">
+            <dt>`.env`（当前桌面版）</dt><dd id="env-path">—</dd>
+            <dt>`llm-profiles.local.yaml`</dt><dd id="profiles-path">—</dd>
+            <dt>生成数据</dt><dd id="settings-root-path">—</dd>
+          </dl>
+          <p class="small">Core/CLI 实例仍从运行目录向上查找 `.env`；因此旧实例的配置仍可放在 `D:\AI\MyApp\book2skill\.env`。</p>
+          <div class="notice">不要把 API Key 写入 Skill、发布清单、日志或命令行参数。配置保存后仍只留在本机。</div>
+        </section>
+
+        <section class="glass card full-card">
+          <h2 class="card-title">宿主适配边界</h2>
+          <div class="host-grid">
+            <div><strong>Codex / OpenAI</strong><span>可安装或复制生成 Skill；Book2Skill 不依赖 Codex 运行。</span></div>
+            <div><strong>TRAE</strong><span>可预览目标目录；Book2Skill 不安装 TRAE。</span></div>
+            <div><strong>Claude / ChatGPT / 项目目录</strong><span>沿用统一 Skill 结构；目标宿主由用户选择和管理。</span></div>
+          </div>
+        </section>
       </div>
     </section>
 
-    <section class="card info-card">
-      <h2>运行目录</h2>
-      <dl>
-        <dt>数据根目录</dt><dd id="root-path">—</dd>
-        <dt>AnalysisBundle</dt><dd id="bundle-path">—</dd>
-        <dt>Skill 输出</dt><dd id="skill-path">—</dd>
-      </dl>
-      <p class="small">Calibre、Tesseract 和 Docling 不随标准 Windows 安装包自动安装；缺少时会给出降级诊断。</p>
+    <section class="page" id="page-help">
+      <div class="grid help-grid">
+        <section class="glass card">
+          <h1 class="card-title">安装</h1>
+          <ol class="guide-list">
+            <li>运行 `Book2Skill-Setup-<版本>-windows-x64.exe`，按向导安装。</li>
+            <li>双击安装目录中的 `Book2Skill.exe` 启动本地 WebGUI。</li>
+            <li>程序默认使用 Windows 用户数据目录，不需要 Python 或 Codex/Trae。</li>
+          </ol>
+        </section>
+        <section class="glass card">
+          <h2 class="card-title">配置</h2>
+          <ol class="guide-list">
+            <li>首次使用保持 Mock 离线模式，确认流程可用。</li>
+            <li>需要模型时，在“配置”页填写模型和 Base URL。</li>
+            <li>API Key 放入当前桌面数据根目录的 `.env`，不要填入界面或命令行。</li>
+          </ol>
+        </section>
+        <section class="glass card">
+          <h2 class="card-title">功能步骤</h2>
+          <ol class="guide-list">
+            <li>在“功能”页选择 Analyze 或 Build。</li>
+            <li>选择合法持有的 PDF、EPUB、MOBI/AZW、TXT、Markdown、DOCX 等文件。</li>
+            <li>填写使用权确认；Build 时补充 Skill 名称和使用边界。</li>
+            <li>开始任务，查看进度和结果；必要时取消任务。</li>
+          </ol>
+        </section>
+        <section class="glass card">
+          <h2 class="card-title">输出与宿主</h2>
+          <p class="card-description">生成结果包含来源追踪和校验信息。宿主适配是输出后的安装动作，不是 Book2Skill 的运行依赖。</p>
+          <ul class="guide-list"><li>可在结果区预览 project、Codex、TRAE、Claude 或 ChatGPT 的安装动作。</li><li>“预览安装动作”不会写入宿主目录。</li><li>宿主本身由用户单独安装和维护。</li></ul>
+        </section>
+      </div>
     </section>
   </main>
   <script src="/app.js" defer></script>

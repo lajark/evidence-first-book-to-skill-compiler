@@ -88,7 +88,13 @@ def test_server_serves_static_assets_without_exposing_api(
 ) -> None:
     with _request(server, "/style.css") as response:
         body = response.read().decode("utf-8")
-    assert "--primary" in body
+    assert "--accent" in body
+
+    with _request(server, "/") as response:
+        html = response.read().decode("utf-8")
+    assert 'data-page="function"' in html
+    assert 'data-page="settings"' in html
+    assert 'data-page="help"' in html
 
 
 def test_server_rejects_invalid_json(server: DesktopWebServer) -> None:

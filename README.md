@@ -54,8 +54,10 @@ python -m pip install -e ".[desktop-safe]"
 book2skill-desktop
 ```
 
-See [docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md) for the desktop installer,
-security boundary, and build instructions. This update does not ship a macOS desktop installer.
+See [docs/DESKTOP_GUIDE.md](docs/DESKTOP_GUIDE.md) for installation, configuration,
+daily use, and host boundaries; see [docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md)
+for installer, security boundary, and build instructions. This update does not ship a
+macOS desktop installer.
 
 ### Install from source
 
@@ -91,7 +93,7 @@ uv run book2skill hello
 ### Install a built wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.3-py3-none-any.whl
+python -m pip install dist\book2skill-1.0.4-py3-none-any.whl
 book2skill version
 ```
 
@@ -193,7 +195,7 @@ input/                              # user-provided documents; do not commit boo
 output/bundles/                     # AnalysisBundle files
 output/skills/<name>/               # final Skill directory
 output/workspace/                   # Raw, Schema, cache, and publish state
-dist/book2skill-1.0.3-*.{whl,tar.gz} # Python distribution artifacts
+dist/book2skill-1.0.4-*.{whl,tar.gz} # Python distribution artifacts
 ```
 
 A generated Skill normally contains:
@@ -233,7 +235,7 @@ The project does not bypass DRM, download pirated material, require a specific m
 .venv/Scripts/python -m hatchling build
 ```
 
-Latest local verification: **1057 passed / 5 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped tests cover optional external-tool or platform scenarios.
+Latest local verification: **1060 passed / 5 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped tests cover optional external-tool or platform scenarios.
 
 ## Documentation
 
