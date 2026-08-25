@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://book2skill.local/schemas/runtime-product.schema.json",
+  "title": "Book2Skill Generated Skill Product Manifest",
+  "description": "Explicit product profile descriptor used by the opt-in install gate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "product", "closure_hash", "manifest_hash"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "product": { "$ref": "#/$defs/product" },
+    "closure_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "manifest_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product_id",
+        "task_id",
+        "task_contract_id",
+        "task_contract_version",
+        "profile",
+        "capabilities"
+      ],
+      "properties": {
+        "product_id": { "type": "string", "minLength": 1 },
+        "task_id": { "type": "string", "minLength": 1 },
+        "task_contract_id": { "type": "string", "minLength": 1 },
+        "task_contract_version": { "type": "string", "minLength": 1 },
+        "profile": { "enum": ["standalone", "extension_backed"] },
+        "runtime_dependency": {
+          "anyOf": [
+            { "$ref": "#/$defs/runtime_dependency" },
+            { "type": "null" }
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/capability" }
+        }
+      }
+    },
+    "runtime_dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["core_id", "core_version", "sdk_id", "sdk_version", "permissions"],
+      "properties": {
+        "core_id": { "type": "string", "minLength": 1 },
+        "core_version": { "type": "string", "minLength": 1 },
+        "sdk_id": { "type": "string", "minLength": 1 },
+        "sdk_version": { "type": "string", "minLength": 1 },
+        "permissions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_id", "kind", "version"],
+      "properties": {
+        "capability_id": { "type": "string", "minLength": 1 },
+        "kind": {
+          "enum": ["bundled_script", "host_required", "host_optional", "unsupported"]
+        },
+        "version": { "type": "string", "minLength": 1 },
+        "resource_id": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

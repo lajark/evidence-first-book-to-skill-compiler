@@ -92,6 +92,7 @@ def skill_tree_metrics(skill_dir: Path) -> dict[str, int | float]:
         for code in check.get("evidence", [])
         if isinstance(code, str)
     }
+    integrity = _load_mapping(skill_dir / "content-integrity.json")
     return {
         "declared_source_count": len(declared),
         "cited_source_count": len(cited_sources),
@@ -116,6 +117,17 @@ def skill_tree_metrics(skill_dir: Path) -> dict[str, int | float]:
             isinstance(check, dict) and check.get("status") == "fail"
             for check in checks
         ),
+        "content_integrity_blocked": int(integrity.get("blocked", False)),
+        "content_integrity_missing_unit_count": len(
+            integrity.get("missing_unit_ids", [])
+            if isinstance(integrity.get("missing_unit_ids", []), list)
+            else []
+        ),
+        "content_integrity_mismatch_count": len(
+            integrity.get("content_mismatch_unit_ids", [])
+            if isinstance(integrity.get("content_mismatch_unit_ids", []), list)
+            else []
+        ),
     }
 
 
@@ -136,6 +148,8 @@ def acceptance_failures(metrics: dict[str, int | float]) -> list[str]:
         failures.append("quality gate found output without usable provenance")
     if metrics.get("quality_fail_check_count", 0) != 0:
         failures.append("generated Skill has failing quality gate(s)")
+    if metrics.get("content_integrity_blocked", 0) != 0:
+        failures.append("generated Skill content-integrity gate is blocked")
     return failures
 
 

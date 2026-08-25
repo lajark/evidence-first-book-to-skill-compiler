@@ -31,6 +31,15 @@ book2skill normalize output/bundles/bundle.json --output normalized-bundle.json
 - Build 使用 staging 和原子替换；Publish 在质量门通过前不触碰当前版本。
 - 开放冲突和未批准单位继续由既有发布前置条件阻断，草稿可保留供审核。
 
+## Generated artifact completeness
+
+Build/Publish 在最终 Runtime Product 文件发出后生成 `content-integrity.json`，按 active
+normalized unit 对账 references 章节、内容、source refs、`provenance.yml` 来源 ID/hash 和必要
+文件；报告失败则不暴露、不发布。随后 `compilation-artifact.json` 对内容报告和最终目录文件
+统一计算 SHA-256。最终目录或载体可用
+`scripts/check_generated_skill_integrity.py <skill-dir> --source-manifests <json>` 重开检查；
+缺权威来源时只能记录 internal-only。
+
 ## SDK
 
 SDK 0.2 新增 `NormalizationService`、`CompatibilityService`、

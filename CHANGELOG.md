@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.5
+
+- feat(runtime): bind immutable Asset Pack releases to production Runtime
+  Closures with upgrade, rollback, and compensating failure recovery.
+- feat(update): add source-provenanced multi-book Pack-only incremental
+  publication and rollback APIs without rebuilding the Skill/Kernel tree.
+- feat(validation): add final generated-artifact content completeness and
+  authoritative SourceManifest carrier checks.
+- fix(compiler): preserve CRLF source content hashes on Windows and keep full
+  source content in references while bounding workflow descriptions.
+- validation: replay three authorized real books through Analyze, Pack release
+  upgrades/rollback, production Closure binding, and installed-copy audits.
+
 ## 1.0.4
 
 - 修复 PyInstaller 桌面包的 WebGUI 静态资源定位，避免窗口页面空白。

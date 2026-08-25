@@ -53,6 +53,9 @@ from book2skill.application.artifacts import (
     write_compilation_artifact,
 )
 from book2skill.application.bundle_trace import verify_bundle_against_raw
+from book2skill.application.content_integrity import (
+    write_content_integrity_report,
+)
 from book2skill.application.gate import GateError
 from book2skill.application.models import AnalysisBundle
 from book2skill.application.normalized_bundle import (
@@ -84,6 +87,16 @@ from book2skill.domain import (
 )
 from book2skill.llm.ports import LLMAdapter
 from book2skill.llm.runtime import LLMRuntimeConfig
+from book2skill.runtime import (
+    ClosureLifecycle,
+    GeneratedSkillProduct,
+    RuntimeClosureManifest,
+    RuntimeClosureSpec,
+    RuntimeProductEmission,
+    RuntimeProductEmitter,
+    RuntimeProductManifest,
+    default_runtime_contract,
+)
 from book2skill.storage import FileRawStorage, RawStorage, atomic_write
 from book2skill.storage.schema_storage import KnowledgeSchemaStorage
 from book2skill.validation import (
@@ -123,6 +136,8 @@ class BuildResult:
     artifact: CompilationArtifact | None = None
     normalized_bundle: NormalizedBundle | None = None
     publication_ready: bool = False
+    runtime_product_manifest: RuntimeProductManifest | None = None
+    runtime_closure_manifest: RuntimeClosureManifest | None = None
 
 
 class BuildUseCase:
@@ -146,6 +161,8 @@ class BuildUseCase:
         data_home: Path | None = None,
         runtime_config: LLMRuntimeConfig | None = None,
         llm: LLMAdapter | None = None,
+        runtime_product: GeneratedSkillProduct | None = None,
+        runtime_closure_spec: RuntimeClosureSpec | None = None,
     ) -> None:
         self._data_home = data_home.resolve() if data_home else None
         # Pass the full adapter (e.g. ``RouterLLMAdapter`` for ``balanced``)
@@ -161,6 +178,8 @@ class BuildUseCase:
             FileRawStorage(self._data_home) if self._data_home else None
         )
         self._writer = writer
+        self._runtime_product = runtime_product
+        self._runtime_closure_spec = runtime_closure_spec
 
     # ------------------------------------------------------------------
     # Public API
@@ -175,6 +194,8 @@ class BuildUseCase:
         rights_note: str | None = None,
         output_dir: Path | None = None,
         on_progress: ProgressReporter | None = None,
+        runtime_product: GeneratedSkillProduct | None = None,
+        runtime_closure_spec: RuntimeClosureSpec | None = None,
     ) -> BuildResult:
         """Full Build: sources → analyze → schema → ir → skill directory.
 
@@ -231,6 +252,8 @@ class BuildUseCase:
             output_dir=output_dir,
             source_manifests=manifests,
             errors=analyze_result.errors,
+            runtime_product=runtime_product or self._runtime_product,
+            runtime_closure_spec=runtime_closure_spec or self._runtime_closure_spec,
         )
         reporter(STAGE_COMPILE, 1, 1, spec.name)
         return result
@@ -242,6 +265,8 @@ class BuildUseCase:
         *,
         output_dir: Path | None = None,
         on_progress: ProgressReporter | None = None,
+        runtime_product: GeneratedSkillProduct | None = None,
+        runtime_closure_spec: RuntimeClosureSpec | None = None,
     ) -> BuildResult:
         """Build from Analysis: load bundle.json → compile tail.
 
@@ -317,6 +342,8 @@ class BuildUseCase:
             output_dir=output_dir,
             source_manifests=manifests,
             errors=[],
+            runtime_product=runtime_product or self._runtime_product,
+            runtime_closure_spec=runtime_closure_spec or self._runtime_closure_spec,
         )
         reporter(STAGE_COMPILE, 1, 1, spec.name)
         return result
@@ -333,6 +360,8 @@ class BuildUseCase:
         output_dir: Path | None,
         source_manifests: list[SourceManifest],
         errors: list[GateError],
+        runtime_product: GeneratedSkillProduct | None,
+        runtime_closure_spec: RuntimeClosureSpec | None,
     ) -> BuildResult:
         """Persist units, build IR, write Skill directory."""
         normalization = normalize_analysis_bundle(bundle)
@@ -352,6 +381,7 @@ class BuildUseCase:
         staging_dir: Path | None = None
         backup_dir: Path | None = None
         swapped = False
+        runtime_emission: RuntimeProductEmission | None = None
         if direct_writer:
             writer = self._writer
             assert writer is not None
@@ -405,6 +435,62 @@ class BuildUseCase:
                 atomic_write(
                     skill_dir / "analysis-run.json",
                     bundle.analysis_run.model_dump_json(indent=2),
+                )
+            if (runtime_product is None) != (runtime_closure_spec is None):
+                raise DomainError(
+                    code=ErrorCode.RUNTIME_CLOSURE_INVALID,
+                    input_id=bundle.collection_id,
+                    message=(
+                        "Runtime Product emission requires both a product "
+                        "descriptor and an explicit Closure specification."
+                    ),
+                    recovery=(
+                        "Provide both runtime_product and runtime_closure_spec, "
+                        "or neither."
+                    ),
+                )
+            if (
+                runtime_product is None
+                and runtime_closure_spec is None
+                and source_manifests
+            ):
+                runtime_product, runtime_closure_spec = default_runtime_contract(
+                    spec
+                )
+            if runtime_product is not None and runtime_closure_spec is not None:
+                runtime_emission = RuntimeProductEmitter.emit(
+                    skill_dir,
+                    runtime_product,
+                    runtime_closure_spec,
+                    lifecycle=ClosureLifecycle.CANDIDATE,
+                    source_manifests=source_manifests,
+                    source_refs=[
+                        (ref.source_id, ref.block_id)
+                        for unit in units
+                        for ref in unit.source_refs
+                    ],
+                )
+
+            # Content and file manifests are written last, after optional
+            # Runtime Product emission, so the final carrier is covered by
+            # one complete inventory and the report itself is hashed.
+            content_report = write_content_integrity_report(
+                skill_dir,
+                units=units,
+                source_manifests=source_manifests,
+            )
+            if content_report.blocked:
+                raise DomainError(
+                    code=ErrorCode.SCHEMA_VALIDATION_FAILED,
+                    input_id=bundle.collection_id,
+                    message=(
+                        "The staged Skill content completeness check failed."
+                    ),
+                    recovery=(
+                        "Inspect content-integrity.json, repair the source, "
+                        "mapping, or generator, and rebuild."
+                    ),
+                    details=content_report.model_dump(mode="json"),
                 )
             artifact = write_compilation_artifact(
                 skill_dir,
@@ -479,6 +565,12 @@ class BuildUseCase:
             artifact=artifact,
             normalized_bundle=normalization.bundle,
             publication_ready=publication_ready,
+            runtime_product_manifest=(
+                runtime_emission.product_manifest if runtime_emission else None
+            ),
+            runtime_closure_manifest=(
+                runtime_emission.closure_manifest if runtime_emission else None
+            ),
         )
 
     @staticmethod

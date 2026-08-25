@@ -58,6 +58,9 @@ from book2skill.application.artifacts import (
     verify_compilation_artifact,
     write_compilation_artifact,
 )
+from book2skill.application.content_integrity import (
+    write_content_integrity_report,
+)
 from book2skill.application.normalized_bundle import (
     normalize_units,
     write_normalized_bundle,
@@ -78,6 +81,14 @@ from book2skill.domain import (
     SourceManifest,
 )
 from book2skill.llm.runtime import AnalysisRunManifest
+from book2skill.runtime import (
+    ClosureLifecycle,
+    GeneratedSkillProduct,
+    RuntimeClosureSpec,
+    RuntimeProductEmission,
+    RuntimeProductEmitter,
+    default_runtime_contract,
+)
 from book2skill.storage import atomic_write
 from book2skill.storage.errors import StorageNotFoundError
 from book2skill.validation import (
@@ -167,6 +178,7 @@ class PublishRecord:
     transaction_id: str | None = None
     artifact_id: str | None = None
     publish_id: str | None = None
+    runtime_closure_hash: str | None = None
 
 
 class PublishTransaction(BaseModel):
@@ -241,6 +253,8 @@ class Publisher:
         counts: dict[str, int] | None = None,
         transaction_id: str | None = None,
         analysis_run: AnalysisRunManifest | None = None,
+        runtime_product: GeneratedSkillProduct | None = None,
+        runtime_closure_spec: RuntimeClosureSpec | None = None,
     ) -> PublishRecord:
         """Compile *units* into a new Skill tree and atomically swap it in.
 
@@ -261,6 +275,7 @@ class Publisher:
         self._ensure_publishable(skill_dir, spec, units, unresolved_conflicts)
 
         try:
+            runtime_emission: RuntimeProductEmission | None = None
             self._compile(
                 staging,
                 units,
@@ -269,6 +284,36 @@ class Publisher:
                 collection_id=collection_id,
             )
             self._validate_staging(staging, now)
+            if (runtime_product is None) != (runtime_closure_spec is None):
+                raise DomainError(
+                    code=ErrorCode.RUNTIME_CLOSURE_INVALID,
+                    input_id=collection_id,
+                    message=(
+                        "Runtime Product emission requires both a product "
+                        "descriptor and an explicit Closure specification."
+                    ),
+                    recovery=(
+                        "Provide both runtime_product and runtime_closure_spec, "
+                        "or neither."
+                    ),
+                )
+            if runtime_product is None and runtime_closure_spec is None:
+                runtime_product, runtime_closure_spec = default_runtime_contract(
+                    spec
+                )
+            if runtime_product is not None and runtime_closure_spec is not None:
+                runtime_emission = RuntimeProductEmitter.emit(
+                    staging,
+                    runtime_product,
+                    runtime_closure_spec,
+                    lifecycle=ClosureLifecycle.PRODUCTION,
+                    source_manifests=source_manifests,
+                    source_refs=[
+                        (ref.source_id, ref.block_id)
+                        for unit in units
+                        for ref in unit.source_refs
+                    ],
+                )
             self._write_meta(
                 staging,
                 spec,
@@ -281,6 +326,24 @@ class Publisher:
                 atomic_write(
                     staging / "analysis-run.json",
                     analysis_run.model_dump_json(indent=2),
+                )
+            content_report = write_content_integrity_report(
+                staging,
+                units=units,
+                source_manifests=source_manifests,
+            )
+            if content_report.blocked:
+                raise DomainError(
+                    code=ErrorCode.PUBLISH_FAILED,
+                    input_id=str(staging),
+                    message=(
+                        "The staged Skill content completeness check failed."
+                    ),
+                    recovery=(
+                        "Inspect content-integrity.json, repair the source, "
+                        "mapping, or generator, and retry publication."
+                    ),
+                    details=content_report.model_dump(mode="json"),
                 )
             artifact = write_compilation_artifact(
                 staging,
@@ -340,6 +403,11 @@ class Publisher:
                 transaction_id=transaction_id,
                 artifact_id=artifact.artifact_id,
                 publish_id=publish_tx.publish_id,
+                runtime_closure_hash=(
+                    runtime_emission.closure_manifest.closure_hash
+                    if runtime_emission is not None
+                    else None
+                ),
             )
             self._append_log(
                 PublishLogEntry(

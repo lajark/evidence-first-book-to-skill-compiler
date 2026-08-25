@@ -208,6 +208,17 @@ class TestIRBuilderBuild:
         assert ir.workflow[2].step.startswith("Principle:")
         assert ir.workflow[3].step == "Consult detailed references"
 
+    def test_workflow_description_is_bounded_and_references_keep_full_content(
+        self,
+    ) -> None:
+        content = "First actionable line.\n" + ("Detailed evidence. " * 40)
+        unit = _unit(unit_id="bounded-1", kind=UnitKind.TECHNIQUE, content=content)
+        ir = IRBuilder([unit], _spec()).build()
+        refs = IRBuilder([unit], _spec()).build_references()
+
+        assert len(ir.workflow[0].description) <= 240
+        assert content in refs["references/techniques.md"]
+
     def test_workflow_synthesized_when_no_executable_kind(self) -> None:
         # Only reference-material kinds (case/term/anti_pattern): no step can
         # be built, so a single routing step is synthesized.
@@ -267,8 +278,7 @@ class TestIRBuilderBuild:
         ir = IRBuilder(units, _spec()).build()
         assert "references/techniques.md" in ir.references
         assert "references/terms.md" in ir.references
-        # frameworks don't get a reference file
-        assert not any("framework" in r for r in ir.references)
+        assert "references/frameworks.md" in ir.references
 
     def test_reference_routes_are_stable_when_input_kind_order_changes(self) -> None:
         units = [
@@ -352,12 +362,29 @@ class TestIRBuilderReferences:
         assert "src-1" in refs["references/techniques.md"]
         assert "blk-1" in refs["references/techniques.md"]
 
+    def test_reference_normalizes_embedded_source_line_endings(self) -> None:
+        units = [
+            _unit(
+                unit_id="tc-crlf",
+                kind=UnitKind.TECHNIQUE,
+                content="first\r\nsecond",
+            )
+        ]
+        refs = IRBuilder(units, _spec()).build_references()
+
+        assert "first\nsecond" in refs["references/techniques.md"]
+        assert "first\r\nsecond" not in refs["references/techniques.md"]
+
     def test_all_units_get_a_provenance_reference(self) -> None:
         units = [_unit(unit_id="fw-1", kind=UnitKind.FRAMEWORK)]
         refs = IRBuilder(units, _spec()).build_references()
-        assert set(refs) == {"references/provenance.md"}
+        assert set(refs) == {
+            "references/provenance.md",
+            "references/frameworks.md",
+        }
         assert "fw-1" in refs["references/provenance.md"]
         assert "src-1 / blk-1" in refs["references/provenance.md"]
+        assert "Always write tests before code." in refs["references/frameworks.md"]
 
     def test_anti_pattern_filename(self) -> None:
         units = [

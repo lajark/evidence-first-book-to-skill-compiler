@@ -68,6 +68,8 @@ _REFERENCE_KINDS: frozenset[UnitKind] = frozenset(
 # ``frozenset`` is useful for membership but its iteration order varies with
 # ``PYTHONHASHSEED``. Keep every rendered reference route in this fixed order.
 _REFERENCE_KIND_ORDER: tuple[UnitKind, ...] = (
+    UnitKind.FRAMEWORK,
+    UnitKind.PRINCIPLE,
     UnitKind.TECHNIQUE,
     UnitKind.CASE,
     UnitKind.TERM,
@@ -78,6 +80,8 @@ _REFERENCE_KIND_ORDER: tuple[UnitKind, ...] = (
 
 #: Mapping from kind to its plural slug used in reference file names.
 _KIND_TO_PLURAL: dict[UnitKind, str] = {
+    UnitKind.FRAMEWORK: "frameworks",
+    UnitKind.PRINCIPLE: "principles",
     UnitKind.TECHNIQUE: "techniques",
     UnitKind.CASE: "cases",
     UnitKind.TERM: "terms",
@@ -372,7 +376,7 @@ class IRBuilder:
                 steps.append(
                     WorkflowStep(
                         step=self._summarize_step(kind, u),
-                        description=u.content,
+                        description=self._workflow_description(u),
                         refs=[u.unit_id],
                     )
                 )
@@ -402,6 +406,16 @@ class IRBuilder:
             first_line = first_line[:77] + "..."
         return f"{label}: {first_line}" if first_line else label
 
+    @staticmethod
+    def _workflow_description(unit: KnowledgeUnit) -> str:
+        """Keep the Kernel concise while retaining full content in references."""
+        compact = " ".join(
+            line.strip() for line in unit.content.splitlines() if line.strip()
+        )
+        if len(compact) > 240:
+            return compact[:237].rstrip() + "..."
+        return compact
+
     def _reference_filenames(
         self, units: list[KnowledgeUnit]
     ) -> list[str]:
@@ -426,9 +440,13 @@ class IRBuilder:
         title = kind.value.replace("_", " ").title()
         lines = [f"# {title}", ""]
         for u in units:
+            lines.append(f"<!-- book2skill-unit-start: {u.unit_id} -->")
             lines.append(f"## {u.unit_id}")
             lines.append("")
-            lines.append(u.content)
+            # Normalize embedded source line endings before outer Markdown
+            # serialization. Otherwise Windows text translation can turn
+            # ``\r\n`` into ``\r\r\n`` and reopen as an extra blank line.
+            lines.append(u.content.replace("\r\n", "\n").replace("\r", "\n"))
             if u.conditions:
                 lines.append("")
                 lines.append("**Conditions:**")
@@ -448,6 +466,7 @@ class IRBuilder:
                         + (f" — \"{ref.quote}\"" if ref.quote else "")
                     )
             lines.append("")
+            lines.append(f"<!-- book2skill-unit-end: {u.unit_id} -->")
         return "\n".join(lines).rstrip() + "\n"
 
     @staticmethod

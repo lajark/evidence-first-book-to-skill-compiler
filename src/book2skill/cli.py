@@ -1954,6 +1954,98 @@ def compare_skill_artifacts(
         raise typer.Exit(code=1)
 
 
+@app.command(name="migrate")
+def migrate(
+    skills_root: Path = typer.Argument(
+        ...,
+        help=(
+            "Directory containing legacy Skill subdirectories "
+            "(for example output/skills)."
+        ),
+    ),
+    backup_root: Path = typer.Option(
+        ...,
+        "--backup-root",
+        help="Explicit, separate root where original Skill trees are snapshotted.",
+    ),
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Approve and activate the migration after the audit inventory.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit the audit or migration result as JSON."
+    ),
+) -> None:
+    """Audit or explicitly migrate legacy generated Skill trees."""
+    from book2skill.domain.errors import DomainError
+    from book2skill.runtime import LegacyMigrationAuditor, LegacyMigrator
+
+    root = skills_root.resolve()
+    skill_dirs = tuple(
+        item
+        for item in sorted(root.iterdir(), key=lambda path: path.name)
+        if item.is_dir() and (item / "SKILL.md").is_file()
+    ) if root.is_dir() else ()
+    try:
+        auditor = LegacyMigrationAuditor()
+        plan = auditor.plan(skill_dirs)
+        if not confirm:
+            payload = plan.model_dump(mode="json")
+        else:
+            ids = [item.skill_id for item in plan.legacy_unclosed]
+            results = LegacyMigrator(auditor).migrate(
+                skill_dirs,
+                approved_skill_ids=ids,
+                backup_root=backup_root,
+                confirm=True,
+            )
+            payload = {
+                "plan": plan.model_dump(mode="json"),
+                "results": [
+                    {
+                        "skill_id": item.skill_id,
+                        "migrated": item.migrated,
+                        "closure_hash": item.closure_hash,
+                        "backup_path": (
+                            str(item.backup_path) if item.backup_path else None
+                        ),
+                        "reason": item.reason,
+                    }
+                    for item in results
+                ],
+            }
+    except (DomainError, OSError) as exc:
+        if isinstance(exc, DomainError):
+            _print_diagnostic(
+                f"[red]ERROR[/red] {exc.code.value}: {exc.message} "
+                f"(recovery: {exc.recovery})",
+                json_output=json_output,
+            )
+            if json_output:
+                _write_json_error(
+                    code=exc.code.value,
+                    message=exc.message,
+                    recovery=exc.recovery,
+                )
+        else:
+            _print_diagnostic(
+                "[red]ERROR[/red] migration input directory is not readable",
+                json_output=json_output,
+            )
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        _write_json(payload)
+    else:
+        if confirm:
+            console.print("[green]Migration activated.[/green]")
+        else:
+            console.print("[yellow]Migration audit only; no files changed.[/yellow]")
+        for item in plan.assessments:
+            console.print(f"  {item.skill_id}: {item.disposition.value}")
+
+
 @app.command(name="install")
 def install(
     skill_dir: Path = typer.Argument(
@@ -1998,6 +2090,22 @@ def install(
         "--no-backup",
         help="Skip backing up the existing installation (the old tree is deleted).",
     ),
+    runtime_product_manifest: Path | None = typer.Option(
+        None,
+        "--runtime-product-manifest",
+        help=(
+            "Use a Generated Skill Product descriptor; when omitted, "
+            "runtime-product.json is detected automatically."
+        ),
+    ),
+    host_runtime_manifest: Path | None = typer.Option(
+        None,
+        "--host-runtime",
+        help=(
+            "JSON host capability snapshot for Extension-backed products; "
+            "requires an explicit or auto-detected Runtime Product descriptor."
+        ),
+    ),
     json_output: bool = typer.Option(
         False, "--json", help="Emit the InstallRecord as JSON to stdout."
     ),
@@ -2005,7 +2113,14 @@ def install(
     """Install a compiled Skill to a target host (FR-04 / FR-09)."""
     from book2skill.domain.errors import DomainError
     from book2skill.hosts import get_installer
+    from book2skill.runtime import (
+        HostRuntime,
+        ProductManifestError,
+        load_host_runtime,
+        load_product_manifest,
+    )
 
+    product_manifest = None
     try:
         installer = get_installer(
             host,
@@ -2014,7 +2129,48 @@ def install(
             backup_root=backup_root,
             target_dir=target_dir,
         )
-        record = installer.install(skill_dir, dry_run=dry_run, no_backup=no_backup)
+        descriptor_path: Path | None = None
+        if runtime_product_manifest is None:
+            auto_descriptor = skill_dir.resolve() / "runtime-product.json"
+            if auto_descriptor.is_file():
+                descriptor_path = auto_descriptor
+            elif host_runtime_manifest is not None:
+                raise ProductManifestError(
+                    "--host-runtime requires a Runtime Product descriptor"
+                )
+        else:
+            skill_root = skill_dir.resolve()
+            descriptor_path = runtime_product_manifest.resolve()
+            try:
+                descriptor_path.relative_to(skill_root)
+            except ValueError as exc:
+                raise ProductManifestError(
+                    "Runtime product manifest must be inside the Skill directory"
+                ) from exc
+
+        if descriptor_path is None:
+            record = installer.install(
+                skill_dir, dry_run=dry_run, no_backup=no_backup
+            )
+        else:
+            product_manifest = load_product_manifest(descriptor_path)
+            if product_manifest.closure_hash is None:
+                raise ProductManifestError(
+                    "Runtime product manifest must pin its Runtime Closure hash"
+                )
+            host_runtime = (
+                load_host_runtime(host_runtime_manifest.resolve())
+                if host_runtime_manifest is not None
+                else HostRuntime()
+            )
+            record = installer.install_runtime_product(
+                skill_dir,
+                product_manifest.product,
+                host_runtime,
+                expected_closure_hash=product_manifest.closure_hash,
+                dry_run=dry_run,
+                no_backup=no_backup,
+            )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     except DomainError as exc:
@@ -2040,6 +2196,21 @@ def install(
             "files_copied": record.files_copied,
             "dry_run": record.dry_run,
         }
+        if product_manifest is not None:
+            payload.update(
+                {
+                    "runtime_product_id": product_manifest.product.product_id,
+                    "runtime_profile": product_manifest.product.profile,
+                    "runtime_closure_hash": next(
+                        (
+                            note.split("=", 1)[1]
+                            for note in record.notes
+                            if note.startswith("runtime_closure_hash=")
+                        ),
+                        None,
+                    ),
+                }
+            )
         _write_json(payload)
         return
 
@@ -2055,6 +2226,17 @@ def install(
     )
     if record.backup_path is not None:
         console.print(f"  backup: {record.backup_path}")
+    if product_manifest is not None:
+        closure_hash = next(
+            (
+                note.split("=", 1)[1]
+                for note in record.notes
+                if note.startswith("runtime_closure_hash=")
+            ),
+            None,
+        )
+        if closure_hash is not None:
+            console.print(f"  runtime closure: {closure_hash}")
 
 
 @app.command(name="uninstall")

@@ -40,12 +40,18 @@ import re
 import shutil
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
 
 from book2skill.domain.errors import DomainError, ErrorCode
+from book2skill.runtime.closure import RuntimeClosureSession
+from book2skill.runtime.product_manifest import (
+    PRODUCT_MANIFEST_FILENAME,
+    load_product_manifest,
+)
+from book2skill.runtime.profiles import GeneratedSkillProduct, HostRuntime
 from book2skill.storage.file_storage import resolve_within
 
 #: Frontmatter block pattern (mirrors :mod:`book2skill.validation.frontmatter_check`).
@@ -211,6 +217,52 @@ class HostInstaller(ABC):
         dry_run: bool = False,
         no_backup: bool = False,
     ) -> InstallRecord:
+        """Install a Skill, enforcing the production product gate by default.
+
+        A tree carrying ``runtime-product.json`` is never treated as a legacy
+        tree.  The descriptor and its pinned production Closure are validated
+        before any host mutation.  Trees without the descriptor retain the
+        historical installer path for backwards compatibility.
+        """
+        skill_dir = Path(skill_dir).resolve()
+        descriptor = skill_dir / PRODUCT_MANIFEST_FILENAME
+        if descriptor.is_file():
+            manifest = load_product_manifest(descriptor)
+            if manifest.closure_hash is None:
+                raise DomainError(
+                    code=ErrorCode.PROFILE_MANIFEST_INVALID,
+                    input_id=str(descriptor),
+                    message="Runtime product manifest has no pinned Closure hash.",
+                    recovery=(
+                        "Regenerate the production product descriptor before "
+                        "installing it."
+                    ),
+                )
+            record = self.install_runtime_product(
+                skill_dir,
+                manifest.product,
+                HostRuntime(),
+                expected_closure_hash=manifest.closure_hash,
+                dry_run=dry_run,
+                no_backup=no_backup,
+            )
+            return replace(
+                record,
+                notes=[*record.notes, "runtime_preflight=default"],
+            )
+        return self._install_unchecked(
+            skill_dir,
+            dry_run=dry_run,
+            no_backup=no_backup,
+        )
+
+    def _install_unchecked(
+        self,
+        skill_dir: Path,
+        *,
+        dry_run: bool = False,
+        no_backup: bool = False,
+    ) -> InstallRecord:
         """Install *skill_dir* into the host's install slot.
 
         Flow: resolve name → compute target → backup old → stage copy → swap
@@ -285,6 +337,46 @@ class HostInstaller(ABC):
             action="install",
             backup_path=backup_path,
             files_copied=files_copied,
+        )
+
+    def install_runtime_product(
+        self,
+        skill_dir: Path,
+        product: GeneratedSkillProduct,
+        host_runtime: HostRuntime,
+        *,
+        expected_closure_hash: str,
+        dry_run: bool = False,
+        no_backup: bool = False,
+    ) -> InstallRecord:
+        """Install a generated product only after its runtime gates pass.
+
+        The public :meth:`install` method delegates here automatically when a
+        product descriptor is present. Direct callers may still use this
+        method to supply an explicit HostRuntime snapshot. It validates
+        profile dependencies/capabilities and opens a production Runtime
+        Closure before any host filesystem mutation occurs.
+        """
+
+        product.assert_installable(host_runtime)
+        session = RuntimeClosureSession.open(Path(skill_dir).resolve())
+        session.assert_task_contract(
+            product.task_contract_id,
+            product.task_contract_version,
+        )
+        session.assert_closure_hash(expected_closure_hash)
+        session.assert_capabilities(product.capabilities)
+        record = self._install_unchecked(
+            skill_dir,
+            dry_run=dry_run,
+            no_backup=no_backup,
+        )
+        return replace(
+            record,
+            notes=[
+                *record.notes,
+                f"runtime_closure_hash={session.closure_hash}",
+            ],
         )
 
     def uninstall(

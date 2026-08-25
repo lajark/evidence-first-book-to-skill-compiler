@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +45,10 @@ from book2skill.application.diff import (
     bundle_to_units,
 )
 from book2skill.application.gate import GateError
+from book2skill.application.pack_incremental import (
+    PackIncrementalPublisher,
+    PackIncrementalResult,
+)
 from book2skill.application.publisher import Publisher, PublishRecord, load_skill_meta
 from book2skill.application.update_transaction import (
     UpdateTransaction,
@@ -62,6 +67,12 @@ from book2skill.domain import (
 from book2skill.domain.models import SourceManifest
 from book2skill.llm.ports import LLMAdapter
 from book2skill.llm.runtime import AnalysisRunManifest, LLMRuntimeConfig
+from book2skill.runtime.pack_store import PersistentPackStore
+from book2skill.runtime.pack_update import (
+    AssetCandidate,
+    AssetPackRelease,
+    PackRollback,
+)
 from book2skill.storage import (
     FileRawStorage,
     KnowledgeSchemaStorage,
@@ -508,6 +519,55 @@ class UpdateUseCase:
     def rollback(self, skill_dir: Path) -> PublishRecord:
         """Restore the latest published snapshot of *skill_dir*."""
         return self._publisher.rollback_latest(Path(skill_dir))
+
+    def rollback_pack_incremental(
+        self,
+        store: PersistentPackStore,
+        pack_id: str,
+        target_version: str,
+        *,
+        closure_root: Path | None = None,
+    ) -> PackRollback:
+        """Rollback a Pack release and optionally its bound production Closure."""
+
+        return PackIncrementalPublisher(store).rollback(
+            pack_id,
+            target_version,
+            closure_root=closure_root,
+        )
+
+    def publish_pack_incremental(
+        self,
+        store: PersistentPackStore,
+        base: AssetPackRelease,
+        *,
+        candidate_id: str,
+        assets: list[AssetCandidate],
+        reviewer: str,
+        version: str,
+        confirm: bool,
+        regression: Callable[[AssetPackRelease], bool],
+        closure_root: Path | None = None,
+    ) -> PackIncrementalResult:
+        """Publish a reviewed Pack without rebuilding the Skill directory.
+
+        The caller supplies source-provenanced candidates produced by the
+        analysis layer.  This explicit method is intentionally separate from
+        :meth:`execute`, whose compatibility path remains full-tree Update.
+        Passing ``closure_root`` additionally pins the published Pack hash in
+        that production Closure and compensates both pointers on failure.
+        """
+
+        return PackIncrementalPublisher(store).execute(
+            base,
+            candidate_id=candidate_id,
+            assets=assets,
+            reviewer=reviewer,
+            version=version,
+            confirm=confirm,
+            regression=regression,
+            closure_root=closure_root,
+        )
 
     def _recover_pending_transactions(self) -> None:
         """Reconcile incomplete Update journals before accepting new work."""

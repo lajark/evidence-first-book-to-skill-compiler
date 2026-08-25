@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://book2skill.local/schemas/runtime-closure.schema.json",
+  "title": "Book2Skill Runtime Closure Manifest",
+  "description": "Pinned runtime product closure for one generated Skill.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "closure_version",
+    "lifecycle",
+    "task_contract_id",
+    "task_contract_version",
+    "skill_kernel_id",
+    "skill_kernel_version",
+    "asset_pack_id",
+    "asset_pack_version",
+    "io_schema_id",
+    "io_schema_version",
+    "security_profile_id",
+    "security_profile_version",
+    "resources",
+    "capabilities",
+    "closure_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "closure_version": { "type": "string", "minLength": 1 },
+    "lifecycle": { "enum": ["candidate", "production"] },
+    "task_contract_id": { "type": "string", "minLength": 1 },
+    "task_contract_version": { "type": "string", "minLength": 1 },
+    "skill_kernel_id": { "type": "string", "minLength": 1 },
+    "skill_kernel_version": { "type": "string", "minLength": 1 },
+    "asset_pack_id": { "type": "string", "minLength": 1 },
+    "asset_pack_version": { "type": "string", "minLength": 1 },
+    "asset_pack_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "io_schema_id": { "type": "string", "minLength": 1 },
+    "io_schema_version": { "type": "string", "minLength": 1 },
+    "security_profile_id": { "type": "string", "minLength": 1 },
+    "security_profile_version": { "type": "string", "minLength": 1 },
+    "resources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/resource" }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "closure_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_id", "kind", "resource_class", "path", "version", "sha256", "provenance"],
+      "properties": {
+        "resource_id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["kernel", "asset_pack", "schema", "tool", "reference"] },
+        "resource_class": {
+          "enum": ["exact_required", "semantic_retrieval", "optional"]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$)).+$"
+        },
+        "version": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "provenance": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_id", "locator"],
+            "properties": {
+              "source_id": { "type": "string", "minLength": 1 },
+              "locator": { "type": "string", "minLength": 1 },
+              "source_sha256": {
+                "type": ["string", "null"],
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_id", "kind", "version"],
+      "properties": {
+        "capability_id": { "type": "string", "minLength": 1 },
+        "kind": {
+          "enum": ["bundled_script", "host_required", "host_optional", "unsupported"]
+        },
+        "version": { "type": "string", "minLength": 1 },
+        "resource_id": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

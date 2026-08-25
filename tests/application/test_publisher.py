@@ -184,6 +184,45 @@ class TestPublish:
         assert (skill_dir / "wiki" / "chapters.md").exists()
         assert (skill_dir / "wiki" / "cheatsheet.md").exists()
 
+    def test_content_integrity_failure_keeps_previous_release(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pub = _publisher(tmp_path)
+        skill_dir = tmp_path / "data" / "skills" / "test-skill"
+        _publish(pub, skill_dir, [_unit("u-1")], _spec(), collection_id="col")
+        previous_artifact = load_compilation_artifact(skill_dir)
+        assert previous_artifact is not None
+
+        original_compile = pub._compile
+
+        def tampered_compile(
+            staging: Path,
+            units: list[KnowledgeUnit],
+            spec: SkillSpec,
+            source_manifests: list[SourceManifest],
+            *,
+            collection_id: str,
+        ) -> None:
+            original_compile(
+                staging,
+                units,
+                spec,
+                source_manifests,
+                collection_id=collection_id,
+            )
+            (staging / "references" / "principles.md").write_text(
+                "# Principles\n", encoding="utf-8"
+            )
+
+        monkeypatch.setattr(pub, "_compile", tampered_compile)
+        with pytest.raises(DomainError) as exc_info:
+            _publish(pub, skill_dir, [_unit("u-1")], _spec(), collection_id="col")
+
+        assert exc_info.value.code == ErrorCode.PUBLISH_FAILED
+        current_artifact = load_compilation_artifact(skill_dir)
+        assert current_artifact is not None
+        assert current_artifact.artifact_id == previous_artifact.artifact_id
+
     def test_startup_recovers_swap_after_hard_crash(self, tmp_path: Path) -> None:
         pub = _publisher(tmp_path)
         data_home = tmp_path / "data"
