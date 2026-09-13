@@ -40,11 +40,15 @@ class EventBus:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._subscribers: list[queue.Queue[dict[str, Any]]] = []
+        self._last_terminal_event: dict[str, Any] | None = None
 
     def subscribe(self) -> queue.Queue[dict[str, Any]]:
         subscriber: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
         with self._lock:
             self._subscribers.append(subscriber)
+            replay = self._last_terminal_event
+        if replay is not None:
+            subscriber.put_nowait(dict(replay))
         return subscriber
 
     def unsubscribe(self, subscriber: queue.Queue[dict[str, Any]]) -> None:
@@ -54,6 +58,8 @@ class EventBus:
 
     def publish(self, event: dict[str, Any]) -> None:
         with self._lock:
+            if event.get("type") in {"completed", "failed", "cancelled"}:
+                self._last_terminal_event = dict(event)
             subscribers = list(self._subscribers)
         for subscriber in subscribers:
             try:
@@ -63,6 +69,12 @@ class EventBus:
                 # document pipeline.  The next event contains the latest
                 # state and is therefore sufficient for the UI.
                 continue
+
+    def reset_terminal(self) -> None:
+        """Forget a prior terminal event before a new job starts."""
+
+        with self._lock:
+            self._last_terminal_event = None
 
 
 class JobContext:
@@ -154,6 +166,7 @@ class JobManager:
                 cancel_event=threading.Event(),
             )
             self._active = state
+        self.events.reset_terminal()
 
         context = JobContext(state, self.events)
         thread = threading.Thread(

@@ -22,7 +22,8 @@
 | CI | `.github/` |
 | 顶层文档 | `README*.md`、`CHANGELOG.md`、`LICENSE`、`ARCHITECTURE.md`、`DATA_MODEL.md`、`EXTENSION_SDK.md`、`FORMAT_ADAPTERS.md`、`OPEN_SOURCE_REUSE_POLICY.md`、`SECURITY.md`、`SKILL_AUTHORING_STANDARD.md`、`SKILL_DEPLOYMENT.md`、`TRACEABILITY_MATRIX.md`、`RELEASE_PACKAGE_SPEC.md`、`DISTRIBUTION_POLICY.md` |
 | 构建/配置 | `pyproject.toml`、`requirements-lock.txt`、`.env.example`、`llm-profiles.example.yaml`、`config.example.yaml` |
-| 公开工具脚本 | `scripts/acceptance_metrics.py`、`scripts/bootstrap_self.py`、`scripts/build_release.py`、`scripts/build_windows.ps1`、`scripts/check_provenance.py`、`scripts/generate_desktop_dependency_manifest.py`、`scripts/generate_desktop_release.py`、`scripts/sign_windows_release.ps1`、`scripts/verify_windows_installer.ps1`、`scripts/install.sh`、`scripts/pre_push_scan.py`、`scripts/run_acceptance.py` |
+| 公开工具脚本 | `scripts/acceptance_metrics.py`、`scripts/bootstrap_self.py`、`scripts/build_public_demo.py`、`scripts/build_release.py`、`scripts/build_windows.ps1`、`scripts/check_provenance.py`、`scripts/generate_desktop_dependency_manifest.py`、`scripts/generate_desktop_release.py`、`scripts/run_public_benchmark.py`、`scripts/sign_windows_release.ps1`、`scripts/verify_windows_installer.ps1`、`scripts/install.sh`、`scripts/pre_push_scan.py`、`scripts/run_acceptance.py` |
+| 公开案例 | `examples/evidence-first-demo/`、`examples/offline-smoke/`（仅原创/合成输入） |
 | Windows 桌面构建配置 | `packaging/windows/`、`docs/DESKTOP_WINDOWS.md` |
 
 **机制判定**：凡 wheel / 官方发布包（`book2skill-core-<version>.zip`）所依赖或引用的文件，一律归公开类。例如 `src/book2skill/llm/benchmark_slots.py`（wheel 打包、被 `quality.py` 的 `benchmark_gap` 使用）、`schemas/`、`templates/`。
@@ -64,7 +65,8 @@
 
 - 推送前运行 `python scripts/pre_push_scan.py --untracked`，确认无 `process-internal` / `sensitive` 命中。
 - Windows 安装器即使生成于 `dist/installer/`，也必须经过许可证、依赖通知、签名状态和
-  `release-manifest.json` 审查；当前私有许可证下只能作为内部预览。
+  `release-manifest.json` 审查；只有依赖许可证清单、可信签名和 `release_ready=true`
+  同时满足时才可公开发布，否则只能作为内部预览。
 - CI 的 `policy-scan` job 强制同一检查，防止绕过。
 - 对已跟踪的内部文件，先 `git rm --cached`（保留本地）再纳入 `.gitignore`；仅修改 `.gitignore` 不会移除已跟踪文件。
 - 若密钥或真实版权材料已进入历史：轮换密钥、暂停共享，再用 `git filter-repo` 类工具清理历史并重新核验，不得只删除最新版本。

@@ -55,5 +55,18 @@ def test_job_manager_cancel_is_cooperative() -> None:
     assert event["job_id"] == job_id
 
 
+def test_job_manager_replays_terminal_event_to_late_subscriber() -> None:
+    manager = JobManager()
+    job_id = manager.start("demo", lambda _context: {"ok": True})
+
+    deadline = time.monotonic() + 2
+    while manager.status()["busy"] and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    event = _wait_for_event(manager, "completed")
+    assert event["job_id"] == job_id
+    assert event["result"] == {"ok": True}
+
+
 def test_job_cancelled_is_a_distinct_control_flow_exception() -> None:
     assert issubclass(JobCancelled, Exception)

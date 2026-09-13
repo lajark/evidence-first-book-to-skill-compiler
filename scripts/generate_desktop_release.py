@@ -84,10 +84,19 @@ def create_manifest(
         raise RuntimeError(
             "External release is blocked while LICENSE contains the private-use notice."
         )
+    if release_ready and signature_status != "trusted":
+        raise RuntimeError(
+            "External Windows installer release requires a trusted "
+            "Authenticode signature."
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     digest = _sha256(artifact)
     dependency_manifest = output_dir / "dependency-manifest.json"
+    if release_ready and not dependency_manifest.is_file():
+        raise RuntimeError(
+            "External Windows installer release requires dependency-manifest.json."
+        )
     dependency_review_required = 0
     if dependency_manifest.is_file():
         dependency_payload = json.loads(
@@ -115,10 +124,14 @@ def create_manifest(
         "built_at": datetime.now(timezone.utc).isoformat(),
         "source_commit": _git_commit(repo),
         "source_dirty": _git_dirty(repo),
-        "release_ready": bool(release_ready and not private_license),
-        "license_status": (
-            "blocked_private_license" if private_license else "review_required"
+        "release_ready": bool(
+            release_ready
+            and not private_license
+            and dependency_manifest.is_file()
+            and dependency_review_required == 0
+            and signature_status == "trusted"
         ),
+        "license_status": "blocked_private_license" if private_license else "confirmed",
         "signature_status": signature_status,
         "signature_timestamp_status": signature_timestamp_status,
         "artifact": {"file": artifact.name, "sha256": digest},

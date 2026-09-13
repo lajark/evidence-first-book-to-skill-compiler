@@ -1,24 +1,63 @@
-# Book2Skill · Evidence-First Book-to-Skill Compiler
+# Evidence-first Book2Skill
 
-Book2Skill compiles legally usable PDF, EPUB, DOCX, MOBI/AZW, TXT, Markdown, HTML, and RTF documents into traceable, reviewable, incrementally updateable Agent Skills that can be deployed across hosts.
+Compile books and documents into traceable, reviewable and deployable AI Skills — with source evidence instead of unverifiable summaries.
 
 > 中文文档：[README.zh-CN.md](README.zh-CN.md) · Package/CLI name: `book2skill`
 
+[![CI](https://github.com/lajark/evidence-first-book-to-skill-compiler/actions/workflows/ci.yml/badge.svg)](https://github.com/lajark/evidence-first-book-to-skill-compiler/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1057%20passed%20%2F%205%20skipped-brightgreen.svg)](#testing-and-quality)
 
-## What it is
+## Why
 
-Book2Skill is a local-first document knowledge compiler. It turns reading material into structured knowledge, source ledgers, and deployable Skills instead of copying a book or producing an unverifiable summary.
+Turning a document into a short summary is easy. Showing where each useful claim came from, whether it can be reviewed, and how it changes when the source changes is harder. Book2Skill is a local-first compiler for that evidence boundary.
 
-```text
-Rights check → immutable Raw + hashes → extraction + locators
-→ AnalysisBundle → NormalizedBundle → Skill IR/Wiki
-→ security, evidence, and compatibility gates → atomic publish/deploy
+```mermaid
+flowchart LR
+    A[Source document] --> B[Evidence ledger<br/>hashes + locators]
+    B --> C[Structured knowledge]
+    C --> D[Quality and security gates]
+    D --> E[Deployable Agent Skill]
+    E --> F[Review, update, replay]
+    F --> B
 ```
 
-## What is different from upstream `book-to-skill`
+## What makes it different
+
+| Ordinary document-to-Skill pipeline | Evidence-first Book2Skill |
+|---|---|
+| Summary-first compression | Evidence-first compilation |
+| Claims are hard to trace | Stable source IDs, block locators and provenance |
+| Black-box output | Reviewable AnalysisBundle, IR and reports |
+| Rebuilds lose context | Deterministic replay and incremental updates |
+| Accuracy is asserted | Quality, security and content-integrity gates |
+
+The four design promises are **Traceable · Reviewable · Reproducible · Updateable**.
+The [traceability matrix](TRACEABILITY_MATRIX.md), [quality gates](docs/QUALITY_GATES.md),
+and [public Benchmark](docs/BENCHMARK.md) define the evidence and boundaries behind
+those claims.
+
+## 3-minute demo
+
+The public demo uses an original repository-authored note and the offline Mock LLM. It does not upload source text:
+
+```bash
+python scripts/build_public_demo.py --output-dir .workspace/tmp/public-demo --json
+```
+
+Open the generated `skill/SKILL.md`, `skill/provenance.yml`, `skill/quality-report.md`, and `skill/content-integrity.json`. The script also verifies the final artifact and prints the source/block locator chain.
+
+See [the demo guide](examples/evidence-first-demo/README.md) and [the Benchmark contract](docs/BENCHMARK.md) for reproducible evidence and limitations.
+
+## Outputs
+
+Each generated Skill normally includes the executable `SKILL.md`, source-linked references,
+a provenance manifest, [quality and compatibility reports](docs/QUALITY_GATES.md), a
+normalized replay boundary, and content-integrity evidence. The compiler never bypasses
+DRM or publishes a user's copyrighted source by default; see the [distribution policy](DISTRIBUTION_POLICY.md)
+for the release boundary.
+
+## Upstream and architecture context
 
 This project references and selectively ports parts of [virgiliojr94/book-to-skill](https://github.com/virgiliojr94/book-to-skill). Licenses, ported files, and commit records are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [docs/PROVENANCE.yml](docs/PROVENANCE.yml). The upstream project focuses on turning books or document collections into on-demand Agent Skills with deterministic extractors, chapter files, and multi-host usage.
 
@@ -93,7 +132,7 @@ uv run book2skill hello
 ### Install a built wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.5-py3-none-any.whl
+python -m pip install dist\book2skill-<version>-py3-none-any.whl
 book2skill version
 ```
 
@@ -188,14 +227,14 @@ book2skill build input/my-book.epub \
 
 Before a real run, confirm the document rights, provider data policy, profile roles, and request budget. See [docs/LLM_CONFIG.md](docs/LLM_CONFIG.md).
 
-## Inputs, outputs, and artifacts
+## Inputs and artifacts
 
 ```text
 input/                              # user-provided documents; do not commit books
 output/bundles/                     # AnalysisBundle files
 output/skills/<name>/               # final Skill directory
 output/workspace/                   # Raw, Schema, cache, and publish state
-dist/book2skill-1.0.5-*.{whl,tar.gz} # Python distribution artifacts
+dist/book2skill-<version>-*.{whl,tar.gz} # Python distribution artifacts
 ```
 
 A generated Skill normally contains:
@@ -235,7 +274,7 @@ The project does not bypass DRM, download pirated material, require a specific m
 .venv/Scripts/python -m hatchling build
 ```
 
-Latest local verification: **1060 passed / 5 skipped**; Ruff, mypy, provenance, and wheel build passed. The skipped tests cover optional external-tool or platform scenarios.
+CI runs the supported Python/OS matrix, tests, lint, type checks, provenance, policy scans, and distribution checks. Optional external-tool or platform cases remain explicitly separated from the core gate.
 
 ## Documentation
 

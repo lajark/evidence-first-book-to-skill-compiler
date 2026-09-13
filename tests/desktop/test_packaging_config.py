@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_windows_spec_excludes_high_risk_optional_pdf_backend() -> None:
     spec = Path("packaging/windows/Book2Skill.spec").read_text(encoding="utf-8")
@@ -72,7 +74,7 @@ def test_desktop_release_checksums_cover_license_evidence(tmp_path: Path) -> Non
     assert "dependency-licenses/demo/LICENSE.txt" in checksums
 
 
-def test_desktop_release_ready_allows_unsigned_open_source_build(
+def test_desktop_release_ready_requires_trusted_signed_build(
     tmp_path: Path,
 ) -> None:
     from scripts.generate_desktop_release import create_manifest
@@ -83,16 +85,31 @@ def test_desktop_release_ready_allows_unsigned_open_source_build(
     artifact = tmp_path / "Book2Skill.exe"
     artifact.write_bytes(b"installer")
 
+    with pytest.raises(RuntimeError, match="trusted Authenticode"):
+        create_manifest(
+            repo=repo,
+            artifact=artifact,
+            version="1.0.1",
+            output_dir=tmp_path / "metadata",
+            release_ready=True,
+        )
+
+    output_dir = tmp_path / "signed-metadata"
+    output_dir.mkdir()
+    (output_dir / "dependency-manifest.json").write_text(
+        '{"packages": []}\n', encoding="utf-8"
+    )
     manifest = create_manifest(
         repo=repo,
         artifact=artifact,
         version="1.0.1",
-        output_dir=tmp_path / "metadata",
+        output_dir=output_dir,
         release_ready=True,
+        signature_status="trusted",
     )
     assert manifest["release_ready"] is True
-    assert manifest["signature_status"] == "unsigned"
-    assert manifest["signature_timestamp_status"] == "not_applicable"
+    assert manifest["license_status"] == "confirmed"
+    assert manifest["signature_status"] == "trusted"
 
 
 def test_windows_build_script_prefers_project_virtual_environment() -> None:

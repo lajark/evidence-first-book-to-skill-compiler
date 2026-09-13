@@ -14,8 +14,13 @@ Outputs:
         summary.md                   human-readable summary
 
 Usage:
-    python scripts/run_acceptance.py
-    python scripts/run_acceptance.py --keep-samples   # do not clean samples
+    python scripts/run_acceptance.py --help
+    python scripts/run_acceptance.py --llm-mode mock
+    python scripts/run_acceptance.py --output-dir .workspace/tmp/acceptance --json
+
+The default ``mock`` mode is deliberate: an ambient ``.env`` must never turn
+an offline acceptance run into a paid or networked model run. Use
+``--llm-mode openai`` only when a real provider run is explicitly intended.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from acceptance_metrics import (  # noqa: E402
+from scripts.acceptance_metrics import (  # noqa: E402
     acceptance_failures,
     analyze_bundle_metrics,
     skill_tree_metrics,
@@ -67,13 +72,22 @@ class StepResult:
 class AcceptanceRunner:
     """Run the A-G acceptance matrix and collect evidence."""
 
-    def __init__(self, run_root: Path, *, keep_samples: bool = False) -> None:
+    def __init__(
+        self,
+        run_root: Path,
+        *,
+        keep_samples: bool = False,
+        llm_mode: str = "mock",
+    ) -> None:
         self.run_root = run_root.resolve()
         self.samples_dir = self.run_root / "samples"
         self.skills_dir = self.run_root / "skills"
         self.data_home = self.run_root / "data"
         self.logs_dir = self.run_root / "logs"
         self.keep_samples = keep_samples
+        if llm_mode not in {"mock", "openai"}:
+            raise ValueError("llm_mode must be 'mock' or 'openai'")
+        self.llm_mode = llm_mode
         self.results: list[StepResult] = []
         self._json_payloads: dict[str, object] = {}
         self.run_id = self.run_root.name
@@ -180,6 +194,10 @@ class AcceptanceRunner:
             return None
         return payload
 
+    def _llm_args(self) -> list[str]:
+        """Return an explicit provider selection for model-bearing steps."""
+        return ["--llm", "mock" if self.llm_mode == "mock" else "openai"]
+
     def _verify_analysis_quality(
         self, result: StepResult, *, expected_source_count: int
     ) -> None:
@@ -248,6 +266,7 @@ class AcceptanceRunner:
         args = [
             "analyze",
             *[str(t) for t in targets],
+            *self._llm_args(),
             "--data-home", str(self.data_home),
             "--rights-note", "M6 acceptance: synthetic samples, no copyright",
             "--json",
@@ -266,6 +285,7 @@ class AcceptanceRunner:
             args = [
                 "build",
                 str(path),
+                *self._llm_args(),
                 "--name", f"m6-acceptance-{cat.lower()}",
                 "--description",
                 f"M6 acceptance skill for category {cat} "
@@ -288,6 +308,7 @@ class AcceptanceRunner:
         args = [
             "batch",
             str(good), str(g1), str(g2),
+            *self._llm_args(),
             "--data-home", str(self.data_home),
             "--rights-note", "M6 acceptance: adversarial batch",
             "--json",
@@ -344,6 +365,7 @@ class AcceptanceRunner:
         args = [
             "analyze",
             str(e_path),
+            *self._llm_args(),
             "--json",
         ]
         # Strip proxy env vars to simulate no-network configuration.
@@ -452,19 +474,71 @@ class AcceptanceRunner:
         return result.exit_code != 0 or bool(result.quality_failures)
 
 
-def main() -> int:
-    ts = time.strftime("%Y%m%dT%H%M%S")
-    run_root = _REPO_ROOT / "workspace" / "acceptance" / "runs" / ts
-    runner = AcceptanceRunner(run_root)
-    summary = runner.run()
-    # Print summary to stdout for the operator.
-    print(f"Run dir: {run_root}")
-    print(
-        f"Steps: {summary['total_steps']} "
-        f"passed={summary['passed']} failed={summary['failed']} "
-        f"skipped={summary['skipped']} "
-        f"expected_failures={summary['expected_failures']}"
+def _parse_args(argv: list[str] | None = None) -> Any:
+    """Parse maintainer-facing options without importing a CLI framework."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Run the synthetic A-G acceptance matrix against the real CLI."
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help=(
+            "Exact output directory for this run; defaults to "
+            "workspace/acceptance/runs/<timestamp>."
+        ),
+    )
+    parser.add_argument(
+        "--keep-samples",
+        action="store_true",
+        help="Keep generated samples in the run directory.",
+    )
+    parser.add_argument(
+        "--llm-mode",
+        choices=("mock", "openai"),
+        default="mock",
+        help="Explicit provider for model-bearing steps (default: mock).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the complete summary JSON to stdout after the run.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    run_root = (
+        args.output_dir.expanduser().resolve()
+        if args.output_dir
+        else _REPO_ROOT / "workspace" / "acceptance" / "runs" / ts
+    )
+    if run_root.exists() and any(run_root.iterdir()):
+        print(
+            "Refusing to overwrite non-empty output directory: "
+            f"{run_root}",
+            file=sys.stderr,
+        )
+        return 2
+    runner = AcceptanceRunner(
+        run_root,
+        keep_samples=args.keep_samples,
+        llm_mode=args.llm_mode,
+    )
+    summary = runner.run()
+    if args.json:
+        print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
+    else:
+        print(f"Run dir: {run_root}")
+        print(
+            f"Steps: {summary['total_steps']} "
+            f"passed={summary['passed']} failed={summary['failed']} "
+            f"skipped={summary['skipped']} "
+            f"expected_failures={summary['expected_failures']}"
+        )
     # Exit non-zero only on unexpected failures.
     return 1 if summary["failed"] > 0 else 0
 

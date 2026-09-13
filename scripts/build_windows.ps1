@@ -36,6 +36,9 @@ try {
         if ($license -match "Private Use Notice") {
             throw "External release is blocked by the current private-use LICENSE."
         }
+        if (-not $Sign) {
+            throw "External Windows installer release requires -Sign with a trusted certificate."
+        }
     }
 
     & $PythonExe $DependencyManifestScript --output $DependencyManifestPath

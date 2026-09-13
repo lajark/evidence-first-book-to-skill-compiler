@@ -58,9 +58,9 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 ```
 
 构建输出为 `dist/Book2Skill/` 和 `dist/installer/`。默认生成内部预览元数据；
-`-ReleaseReady` 会在当前私有许可证下主动失败，避免误把未授权构建物当作公开发行版。
-如果依赖清单存在 `review_required` 项，`-ReleaseReady` 同样会失败，避免遗漏上游
-许可证文本审查。
+`-ReleaseReady` 只有在 MIT 许可、依赖清单无 `review_required` 项并使用可信证书签名时
+才允许通过，否则主动失败，避免误把未授权或未签名构建物当作公开发行版。公开发布前
+必须同时满足依赖许可证清单、可信签名和 `release_ready=true`；未满足时只能内部预览。
 
 在普通 Windows 用户环境可用隔离临时目录执行安装/升级/卸载验收；脚本不会使用已有的
 `%LOCALAPPDATA%\Programs\Book2Skill`，也不会删除已存在目录：
@@ -86,8 +86,8 @@ powershell -ExecutionPolicy Bypass -File scripts/verify_windows_installer.ps1 `
 如需同时验证桌面程序启动，可追加 `-LaunchSmokeSeconds 5`；脚本会在短暂运行后关闭
 由本次测试启动的进程，再执行卸载。
 
-正式发行仍需要依赖许可证审查、干净 Windows 11 安装/升级/卸载验收，并将签名结果
-写回发布 Manifest；Authenticode 签名对个人开源项目是可选增强，不是硬性前置条件。
+正式发行仍需要依赖许可证审查、干净 Windows 11 安装/升级/卸载验收，并将可信签名结果
+写回发布 Manifest；未签名安装器不进入公开发布。
 
 签名脚本为 `scripts/sign_windows_release.ps1`，支持证书存储中的
 `-CertificateThumbprint`，或通过环境变量 `BOOK2SKILL_SIGNING_PASSWORD` 提供密码的
@@ -96,8 +96,8 @@ powershell -ExecutionPolicy Bypass -File scripts/verify_windows_installer.ps1 `
 时间戳服务，并在 Manifest 中记录 `signature_status=trusted` 与
 `signature_timestamp_status=present`。时间戳通过 `-TimestampUrl https://<RFC3161-endpoint>`
 传入，脚本使用 SHA-256 RFC 3161 时间戳并验证签名中确实包含时间戳；不要把 PFX、密码或私钥
-放入仓库、安装包或日志。个人项目在许可证允许分发时，即使没有证书也可分发未签名安装器，
-Manifest 会记录 `signature_status=unsigned`，用户可能看到 SmartScreen 或未知发布者提示。
+放入仓库、安装包或日志。没有可信证书时只能保留内部预览，Manifest 会记录
+`signature_status=unsigned`，用户可能看到 SmartScreen 或未知发布者提示。
 
 拿到组织/CA 证书后，密码只在本机环境变量中提供，示例：
 

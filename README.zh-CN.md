@@ -1,26 +1,56 @@
-# Book2Skill · Evidence-First Book-to-Skill Compiler
+# Evidence-first Book2Skill
 
-Book2Skill 将用户合法持有的 PDF、EPUB、DOCX、MOBI/AZW、TXT、Markdown、HTML 或 RTF 文档，编译为可追溯、可审核、可增量更新、可跨宿主部署的 Agent Skill。
+将书籍和文档编译为可追溯、可复核、可部署的 AI Skill，而不是无法验证的摘要。
 
 > English documentation: [README.md](README.md) · Package/CLI name: `book2skill`
 
+[![CI](https://github.com/lajark/evidence-first-book-to-skill-compiler/actions/workflows/ci.yml/badge.svg)](https://github.com/lajark/evidence-first-book-to-skill-compiler/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1057%20passed%20%2F%205%20skipped-brightgreen.svg)](#测试与质量)
 
-## 这是什么
+## 为什么需要它
 
-Book2Skill 是一个本地优先的文档知识编译器。它把一次性阅读材料转换成结构化知识、来源台账和可部署 Skill，而不是简单复制全文或生成一份不可核验的摘要。
+把文档压缩成摘要很容易；证明每条可用结论来自哪里、能否复核，以及来源更新后如何变化，则需要明确的证据边界。Book2Skill 是一个本地优先的文档知识编译器，专门维护这条边界。
 
-核心链路：
-
-```text
-合法性确认 → Raw 固化与哈希 → 格式抽取与定位
-→ AnalysisBundle → NormalizedBundle → Skill IR/Wiki
-→ 安全、证据和兼容性质量门 → 原子发布/部署
+```mermaid
+flowchart LR
+    A[源文档] --> B[证据台账<br/>哈希 + 定位]
+    B --> C[结构化知识]
+    C --> D[质量与安全闸门]
+    D --> E[可部署 Agent Skill]
+    E --> F[审核、更新、回放]
+    F --> B
 ```
 
-## 相比上游 book-to-skill 的创新点
+## 核心差异
+
+| 普通文档转 Skill | Evidence-first Book2Skill |
+|---|---|
+| 摘要优先 | Evidence 优先 |
+| 结论难以追溯 | 稳定 source ID、block locator 和 provenance |
+| 黑箱输出 | AnalysisBundle、IR 和报告可审核 |
+| 重建时丢失上下文 | 确定性回放与增量更新 |
+| 只宣称准确 | 质量、安全和内容完整性闸门 |
+
+四个长期承诺是 **Traceable · Reviewable · Reproducible · Updateable**。
+这些能力的证据与边界见[来源追踪矩阵](TRACEABILITY_MATRIX.md)、[质量闸门](docs/QUALITY_GATES.md)
+和[公开 Benchmark](docs/BENCHMARK.md)。
+
+## 3 分钟案例
+
+公开案例使用仓库原创短文和离线 Mock LLM，不上传源文档：
+
+```bash
+python scripts/build_public_demo.py --output-dir .workspace/tmp/public-demo --json
+```
+
+打开生成目录中的 `skill/SKILL.md`、`skill/provenance.yml`、`skill/quality-report.md` 和 `skill/content-integrity.json`，即可查看从 source/block locator 到最终 Skill 的证据链。详见[案例说明](examples/evidence-first-demo/README.md)和[Benchmark 合同](docs/BENCHMARK.md)。
+
+## 输出内容
+
+生成的 Skill 通常包含可执行的 `SKILL.md`、带来源的 references、provenance 清单、[质量与兼容性报告](docs/QUALITY_GATES.md)、可回放规范化边界和内容完整性证据。项目不绕过 DRM，也不会默认发布用户的版权原文；发布边界见[分发政策](DISTRIBUTION_POLICY.md)。
+
+## 上游与架构背景
 
 本项目参考并选择性移植了 [virgiliojr94/book-to-skill](https://github.com/virgiliojr94/book-to-skill) 的部分格式适配器；上游许可证、移植文件和 commit 记录见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 [docs/PROVENANCE.yml](docs/PROVENANCE.yml)。上游项目的核心体验是将书籍或文档提炼成可按需加载的 Agent Skill，并提供确定性抽取器、章节文件和多宿主使用方式。
 
@@ -94,7 +124,7 @@ uv run book2skill hello
 ### 安装已构建 wheel
 
 ```powershell
-python -m pip install dist\book2skill-1.0.4-py3-none-any.whl
+python -m pip install dist\book2skill-<version>-py3-none-any.whl
 book2skill version
 ```
 
@@ -193,7 +223,7 @@ book2skill build input/my-book.epub \
 
 真实发送前确认：输入文档的使用权、provider 数据策略、profile 角色和 API 预算。完整配置见 [docs/LLM_CONFIG.md](docs/LLM_CONFIG.md)。
 
-## 输入、输出和交付物
+## 输入和交付物
 
 默认目录：
 
@@ -202,7 +232,7 @@ input/                         # 用户提供的输入文档（不提交版权�
 output/bundles/                # AnalysisBundle
 output/skills/<name>/          # 最终 Skill 目录
 output/workspace/              # Raw / Schema / 缓存 / 发布状态
-dist/book2skill-1.0.4-*.{whl,tar.gz}  # Python 交付包
+dist/book2skill-<version>-*.{whl,tar.gz}  # Python 交付包
 ```
 
 一个 Skill 通常包含：
@@ -242,7 +272,7 @@ compatibility-report.{md,json} # 规范、工具和宿主分层证据
 .venv/Scripts/python -m hatchling build
 ```
 
-当前本地验证：**1060 passed / 5 skipped**；Ruff、mypy、来源一致性和 wheel 构建通过。skipped 项为可选外部工具或平台场景。
+CI 会执行受支持的 Python/OS 矩阵、测试、Lint、类型检查、来源一致性、策略扫描和交付检查；可选外部工具或平台场景会单独标注，不会伪装成核心门禁。
 
 ## 文档
 

@@ -92,12 +92,11 @@ dist/installer/
 
 桌面 Manifest 至少记录 `platform=windows`、`architecture=x64`、构建 Commit、
 工作区是否有未提交改动（`source_dirty`）、安装器 SHA-256、签名状态、许可证状态和
-`release_ready`。当前许可证仍含私有使用
-限制，或 PyMuPDF 等高风险依赖未完成审查时，必须保持
-`release_ready=false`，只能作为内部预览，不得对外宣称已完成分发验收。
-代码签名是 Windows 分发的可选增强，不作为个人项目的硬门。未签名时明确记录
-`signature_status=unsigned`；可信 Authenticode、内部自签名和不受信任链分别记录为
-`trusted`、`self_signed_untrusted`、`signed_untrusted`。使用时间戳时，
-`signature_timestamp_status` 必须为 `present`；没有请求时间戳时记录
+`release_ready`。即使项目代码采用 MIT，Windows 安装器也只能在依赖许可证清单存在、
+依赖审查无 `review_required`、可信 Authenticode 签名存在且显式传入
+`release_ready=true` 时进入公开发布；否则必须保持 `release_ready=false`，只能作为
+内部预览。未签名时明确记录 `signature_status=unsigned`；可信 Authenticode、内部自签名
+和不受信任链分别记录为 `trusted`、`self_signed_untrusted`、`signed_untrusted`。
+使用时间戳时，`signature_timestamp_status` 必须为 `present`；没有请求时间戳时记录
 `not_applicable` 或 `not_requested`。签名缺失应提示 SmartScreen/信任链风险，但不得
 伪报为已签名。

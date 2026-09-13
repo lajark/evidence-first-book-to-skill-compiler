@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- docs: reposition the project around Traceable, Reviewable, Reproducible, and
+  Updateable evidence, with a bilingual first-screen README and offline public demo.
+- feat(benchmark): add a versioned public Benchmark v1 report contract and a
+  deterministic two-run structural benchmark; semantic quality remains explicitly
+  `not_measured` until independent labels exist.
+- chore(maintenance): add contributor guidance, issue templates, pull-request
+  checks, and a code of conduct without weakening security or rights boundaries.
+- fix(acceptance): make the maintainer acceptance runner explicitly offline by
+  default and add non-destructive `--help`, `--output-dir`, `--llm-mode`, and
+  `--json` options.
+- compliance: align the repository license and package metadata on MIT while
+  keeping Windows installers internal until the dependency manifest and a
+  trusted signature accompany an explicit `release_ready=true` gate.
+- docs: add a bilingual launch-note draft with the evidence-first message and
+  a gated publication sequence.
+
 ## 1.0.5
 
 - feat(runtime): bind immutable Asset Pack releases to production Runtime
